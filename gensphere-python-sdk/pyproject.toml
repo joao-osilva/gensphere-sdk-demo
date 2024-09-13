@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "gensphere-python-sdk"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.11,<=3.13"
+fastapi = "^0.114.1"
+uvicorn = "^0.30.6"
+crewai = {extras = ["tools"], version = "^0.55.2"}
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
