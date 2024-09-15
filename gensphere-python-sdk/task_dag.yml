@@ -1,32 +1,80 @@
 nodes:
   A:
-    executor: AExecutor
-    dependencies: []
+    executor: pandas_executor
     executor_args:
-      args: []  # No positional arguments needed for AExecutor
-      kwargs: {}  # No keyword arguments needed for AExecutor
-  B:
-    executor: BExecutor
-    dependencies: [A]
-    executor_args:
-      args: [10]  # Positional arguments for BExecutor constructor
-      kwargs: {}  # No keyword arguments needed for BExecutor
-  C:
-    executor: CExecutor
-    dependencies: [A, B]
-    executor_args:
-      args: []  # No positional arguments
+      args: []
       kwargs:
-        arg1: "{{ A }}"  # Use output of node A
-        arg2: "{{ B }}"  # Use output of node B
-  #D:
+        method: ".apply(lambda x: x * 2)"
+        input_path: "input_dataframe.csv"
+        output_path: "modified_dataframe.csv"
+    dependencies: []
+
+  B:
+    executor: sql_executor
+    executor_args:
+      args: []
+      kwargs:
+        table_path: "{{ A }}"
+        query: "SELECT * FROM data_table WHERE value > 40"
+        output_path: "filtered_output.csv"
+    dependencies: [A]
+
+  C:
+    executor: openai
+    executor_args:
+      args: []
+      kwargs:
+        model: "gpt-3.5-turbo"
+        messages:
+          - role: "user"
+            content: "Analyze the data: {{ B }}"
+        structured_output: false
+    dependencies: [B]
+
+  D:
+    executor: openai
+    executor_args:
+      args: []
+      kwargs:
+        model: "gpt-3.5-turbo"
+        messages:
+          - role: "user"
+            content: "Summarize the structured data: {{ C }}"
+        structured_output: true
+        schema:
+          type: object
+          properties:
+            summary:
+              type: string
+    dependencies: [C]
+
+  E:
+    executor: openai
+    executor_args:
+      args: []
+      kwargs:
+        model: "gpt-3.5-turbo"
+        messages:
+          - role: "user"
+            content: "Perform calculations with a tool call: {{ D }}"
+        structured_output: true
+        schema:
+          type: object
+          properties:
+            calculation:
+              type: number
+        tool_name: "calculate_tool"
+    dependencies: [D]
+
+
+  #H:
   #  executor: "https://local.api/execute"
   #  dependencies: [B]
   #  executor_args:
   #    args: []
   #    kwargs:
   #      input: "test"  # Static argument
-  #E:
+  #I:
   #  executor: "my_api_task"
   #  dependencies: [C]
   #  executor_args:
