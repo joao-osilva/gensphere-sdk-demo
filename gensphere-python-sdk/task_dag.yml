@@ -1,0 +1,35 @@
+nodes:
+  A:
+    executor: AExecutor
+    dependencies: []
+    executor_args:
+      args: []  # No positional arguments needed for AExecutor
+      kwargs: {}  # No keyword arguments needed for AExecutor
+  B:
+    executor: BExecutor
+    dependencies: [A]
+    executor_args:
+      args: [10]  # Positional arguments for BExecutor constructor
+      kwargs: {}  # No keyword arguments needed for BExecutor
+  C:
+    executor: CExecutor
+    dependencies: [A, B]
+    executor_args:
+      args: []  # No positional arguments
+      kwargs:
+        arg1: "{{ A }}"  # Use output of node A
+        arg2: "{{ B }}"  # Use output of node B
+  #D:
+  #  executor: "https://local.api/execute"
+  #  dependencies: [B]
+  #  executor_args:
+  #    args: []
+  #    kwargs:
+  #      input: "test"  # Static argument
+  #E:
+  #  executor: "my_api_task"
+  #  dependencies: [C]
+  #  executor_args:
+  #    args: []
+  #    kwargs:
+  #      input: "{{ C }}"  # Use output of node C

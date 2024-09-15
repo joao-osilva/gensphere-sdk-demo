@@ -1,24 +1,25 @@
 import yaml
 import networkx as nx
 import requests
-import boto3
-from botocore.exceptions import NoCredentialsError, ClientError
+# import boto3  # Commented out for testing without DynamoDB
+# from botocore.exceptions import NoCredentialsError, ClientError  # Commented out for testing without DynamoDB
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import re
+from threading import Lock
 
 # Assume OpenAI API Key is set in the environment variable 'OPENAI_API_KEY'
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 
 class AgenticFlowThreading:
-    def __init__(self, yaml_file_path, available_classes, db_table_name, max_workers=10):
+    def __init__(self, yaml_file_path, available_classes, db_table_name=None, max_workers=10):
         """
         Initializes the GraphExecutor.
 
         :param yaml_file_path: Path to the YAML file containing node dependencies and executors.
         :param available_classes: A dictionary mapping class names (strings) to actual class objects.
-        :param db_table_name: The name of the AWS DynamoDB table to look up executors when needed.
+        :param db_table_name: The name of the AWS DynamoDB table to look up executors when needed (optional).
         :param max_workers: Maximum number of threads to use for parallel execution.
         """
         self.graph = nx.DiGraph()
@@ -27,10 +28,11 @@ class AgenticFlowThreading:
         self.futures = {}
         self.max_workers = max_workers
         self.db_table_name = db_table_name
+        self.lock = Lock()  # Use a lock to synchronize access to shared resources
 
-        # AWS DynamoDB client
-        self.dynamodb = boto3.resource('dynamodb')
-        self.table = self.dynamodb.Table(db_table_name)
+        # AWS DynamoDB client setup (commented out for testing)
+        # self.dynamodb = boto3.resource('dynamodb')
+        # self.table = self.dynamodb.Table(db_table_name) if db_table_name else None
 
         # Load graph structure from the YAML file and initialize classes
         self.load_graph_from_yaml(yaml_file_path, available_classes)
@@ -74,29 +76,33 @@ class AgenticFlowThreading:
                         "type": "class",
                         "executor": available_classes[executor_name](*args, **kwargs),
                     }
+                # Commented out DynamoDB-related code for testing without AWS interactions
+                # else:
+                #     # Fetch URL details from AWS DynamoDB
+                #     try:
+                #         response = self.table.get_item(Key={'executor_id': executor_name})
+                #         if 'Item' not in response:
+                #             raise ValueError(f"No entry found in the database for executor '{executor_name}'")
+
+                #         # Extract the URL from the DynamoDB entry
+                #         url = response['Item'].get('url')
+                #         if not url:
+                #             raise ValueError(f"URL not found for executor '{executor_name}' in the database")
+
+                #         # Store the URL and arguments for later execution
+                #         self.node_classes[node] = {
+                #             "type": "url",
+                #             "executor": url,
+                #             "args": args,
+                #             "kwargs": kwargs
+                #         }
+
+                #     except (NoCredentialsError, ClientError) as e:
+                #         print(f"Error accessing AWS DynamoDB: {e}")
+                #         raise
                 else:
-                    # Fetch URL details from AWS DynamoDB
-                    try:
-                        response = self.table.get_item(Key={'executor_id': executor_name})
-                        if 'Item' not in response:
-                            raise ValueError(f"No entry found in the database for executor '{executor_name}'")
-
-                        # Extract the URL from the DynamoDB entry
-                        url = response['Item'].get('url')
-                        if not url:
-                            raise ValueError(f"URL not found for executor '{executor_name}' in the database")
-
-                        # Store the URL and arguments for later execution
-                        self.node_classes[node] = {
-                            "type": "url",
-                            "executor": url,
-                            "args": args,
-                            "kwargs": kwargs
-                        }
-
-                    except (NoCredentialsError, ClientError) as e:
-                        print(f"Error accessing AWS DynamoDB: {e}")
-                        raise
+                    # If DynamoDB lookup is not being used, raise an error for unknown executors
+                    raise ValueError(f"Executor '{executor_name}' not found in available classes or known sources.")
 
                 # Add dependencies as edges in the graph
                 dependencies = details.get('dependencies', [])
@@ -147,11 +153,14 @@ class AgenticFlowThreading:
         :param node: The node to run.
         :return: The result of the node's execution.
         """
+        result = None  # Initialize result with a default value to avoid unassigned access errors
+
         # Get predecessors (dependencies) of the current node
         predecessors = list(self.graph.predecessors(node))
 
         # Collect outputs of the dependencies
-        inputs = [self.results[predecessor] for predecessor in predecessors]
+        with self.lock:  # Ensure safe access to shared resources
+            inputs = [self.results[predecessor] for predecessor in predecessors]
 
         # Determine the type of executor and execute accordingly
         executor_info = self.node_classes[node]
@@ -159,14 +168,21 @@ class AgenticFlowThreading:
 
         if executor_info["type"] == "class":
             # Call the run method of the class instance
-            return executor_info["executor"].run(*inputs, **kwargs)
-        elif executor_info["type"] == "url":
-            # Make an API request to the URL with the inputs and additional arguments
-            url = executor_info["executor"]
-            args = executor_info["args"]
-            response = requests.post(url, json={"inputs": inputs, *args, **kwargs})
-            response.raise_for_status()  # Raise an error for bad responses
-            return response.json()  # Assumes the response is in JSON format
+            result = executor_info["executor"].run(*inputs, **kwargs)
+        # Commented out local API calls for testing without deployed APIs
+        # elif executor_info["type"] == "url":
+        #     # Make an API request to the URL with the inputs and additional arguments
+        #     url = executor_info["executor"]
+        #     args = executor_info["args"]
+        #     # Correctly merge inputs, args, and kwargs into the JSON payload
+        #     payload = {
+        #         "inputs": inputs,
+        #         "args": args,
+        #         **kwargs  # Merge kwargs into the payload dictionary
+        #     }
+        #     response = requests.post(url, json=payload)
+        #     response.raise_for_status()  # Raise an error for bad responses
+        #     result = response.json()  # Assumes the response is in JSON format
         elif executor_info["type"] == "openai":
             # Make an API call to the OpenAI Chat Completions API
             headers = {
@@ -183,7 +199,15 @@ class AgenticFlowThreading:
                 json=payload
             )
             response.raise_for_status()
-            return response.json()["choices"][0]["message"]["content"]
+            result = response.json()["choices"][0]["message"]["content"]
+        else:
+            # Handle cases where the executor type is not recognized
+            raise ValueError(f"Unknown executor type for node '{node}'.")
+
+        # Save the result in a thread-safe manner
+        with self.lock:
+            self.results[node] = result
+        return result
 
     def submit_node(self, executor, node):
         """
@@ -206,17 +230,23 @@ class AgenticFlowThreading:
             raise ValueError("The graph contains a cycle and is not a DAG.")
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Schedule nodes for execution as their dependencies are satisfied
-            for node in sorted_nodes:
-                # Check if all dependencies have completed
-                dependencies = list(self.graph.predecessors(node))
-                if all(dep in self.results for dep in dependencies):
-                    self.submit_node(executor, node)
+            # Track which nodes can be submitted based on dependencies being resolved
+            nodes_to_run = set(sorted_nodes)
+
+            while nodes_to_run:
+                for node in list(nodes_to_run):
+                    dependencies = list(self.graph.predecessors(node))
+                    # Check that all dependencies have been completed
+                    with self.lock:
+                        if all(dep in self.results for dep in dependencies):
+                            self.submit_node(executor, node)
+                            nodes_to_run.remove(node)
 
             # Wait for all submitted futures to complete and collect results
             for future in as_completed(self.futures):
                 node = self.futures[future]
                 try:
-                    self.results[node] = future.result()
+                    future.result()  # This will raise any exceptions caught during node execution
                 except Exception as e:
                     print(f"Error executing node {node}: {e}")
+
