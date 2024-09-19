@@ -1,6 +1,6 @@
 # GenFlow
 
-**GenFlow** is a powerful, low-level framework designed for AI developers who want to build, share, and observe complex LLM-driven workflows with ease. With YAML-defined nodes and flows, AgenticFlow enables developers to create modular, composable, and portable AI workflows that integrate seamlessly with existing tools and libraries.
+**GenFlow** is a powerful, low-level framework designed for AI developers who want to build, share, and observe complex LLM-driven workflows with ease. With YAML-defined nodes and flows, GenFlow enables developers to create modular, composable, and portable AI workflows that integrate seamlessly with existing tools and libraries.
 
 ---
 
@@ -170,17 +170,18 @@ if __name__ == '__main__':
     flow.run()
     print(flow.outputs)
 ```
+
 ### 6. Execute
-```bash
+
+``bash
 python compose_flows.py
 python main.py
-```
-
+``
 This sequence will first combine `sample.yaml` and `data_processing_flow.yaml` into a single flow (combined_flow.yaml) and then run it.
 ---
 ## Examples
 
-abcbc
+[coming soon]
 
 ---
 ## Integrations
