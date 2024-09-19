@@ -13,8 +13,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from gensphere_python_sdk.AgenticFlow.AgenticFlow import AgenticFlow
-from gensphere_python_sdk.AgenticFlow.yml_compose import YmlCompose
+from gensphere_python_sdk.GenFlow.GenFlow import GenFlow
+from gensphere_python_sdk.GenFlow.yml_compose import YmlCompose
 import pprint
 
 if __name__ == '__main__':
@@ -27,8 +27,8 @@ if __name__ == '__main__':
         logger.info("Combined YAML Data:")
         pprint.pprint(combined_yaml_data)
 
-        # Initialize AgenticFlow with the combined YAML data
-        flow = AgenticFlow(combined_yaml_data)
+        # Initialize GenFlow with the combined YAML data
+        flow = GenFlow(combined_yaml_data)
         flow.parse_yaml()
 
         # Log the nodes parsed

@@ -1,4 +1,4 @@
-# AgenticFlow.py
+# GenFlow.py
 
 import yaml
 import jinja2
@@ -18,7 +18,7 @@ load_dotenv()
 # Module-level logger
 logger = logging.getLogger(__name__)
 
-class AgenticFlow:
+class GenFlow:
     """
     Class to parse YAML data, construct an execution graph, and execute nodes.
     """
@@ -38,7 +38,7 @@ class AgenticFlow:
             raise ValueError("OpenAI API key not found. Please set OPENAI_API_KEY environment variable.")
         self.client = OpenAI(api_key=api_key)
 
-        logger.debug("AgenticFlow initialized.")
+        logger.debug("GenFlow initialized.")
 
     def parse_yaml(self):
         """
@@ -104,7 +104,7 @@ class AgenticFlow:
 
         for node_name in execution_order:
             node = self.nodes[node_name]
-            node.set_flow(self)  # Set the reference to the AgenticFlow instance
+            node.set_flow(self)  # Set the reference to the GenFlow instance
 
             # Render parameters
             try:
@@ -147,15 +147,15 @@ class Node:
         self.type = node_data['type']
         self.node_data = node_data
         self.outputs = node_data.get('outputs', [])
-        self.flow = None  # Reference to the AgenticFlow instance
+        self.flow = None  # Reference to the GenFlow instance
         self.logger = logging.getLogger(f"{__name__}.{self.name}")
 
     def set_flow(self, flow):
         """
-        Sets the reference to the AgenticFlow instance.
+        Sets the reference to the GenFlow instance.
 
         Args:
-            flow (AgenticFlow): The AgenticFlow instance.
+            flow (GenFlow): The GenFlow instance.
         """
         self.flow = flow
 
@@ -425,7 +425,7 @@ class Node:
         """
         variable_name = self.node_data['variable_name']
         value = params['value']
-        # Store the variable in the AgenticFlow's variable store
+        # Store the variable in the GenFlow's variable store
         self.flow.variables[variable_name] = value
         return {}
 
