@@ -48,3 +48,24 @@ Gain complete control over your workflow execution. As a low-level framework, Ag
 
 ```bash
 pip install genflow
+
+---
+
+## Quickstart guide
+pass
+
+---
+## Examples
+pass
+
+---
+## Integration
+pass
+
+---
+## Contributing
+pass
+
+---
+## License
+pass
