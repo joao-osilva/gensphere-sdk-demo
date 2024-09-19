@@ -1,18 +1,10 @@
-from gensphere_python_sdk.AgenticFlow.AgenticFlow import AgenticFlow
-from gensphere_python_sdk.AgenticFlow.yml_compose import YmlCompose
-from dotenv import load_dotenv
-import os
-import logging
-import pprint
-
-#load_dotenv()
-#OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
 # main.py
 
-# Set up logging for main script
+import logging
+
+# Set up logging configuration before importing other modules
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler("app.log", mode='w'),
@@ -21,13 +13,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+from gensphere_python_sdk.AgenticFlow.AgenticFlow import AgenticFlow
+from gensphere_python_sdk.AgenticFlow.yml_compose import YmlCompose
+import pprint
+
 if __name__ == '__main__':
     # Compose the YAML files into one combined data structure
     try:
         composer = YmlCompose('sample.yaml')
         combined_yaml_data = composer.compose(save_combined_yaml=True, output_file='combined.yaml')
 
-        # Print the combined YAML data
+        # Log the combined YAML data
         logger.info("Combined YAML Data:")
         pprint.pprint(combined_yaml_data)
 
@@ -35,12 +31,12 @@ if __name__ == '__main__':
         flow = AgenticFlow(combined_yaml_data)
         flow.parse_yaml()
 
-        # Print the nodes parsed
+        # Log the nodes parsed
         logger.info("Nodes parsed:")
         for node_name in flow.nodes:
             logger.info(f"- {node_name}")
 
-        # Run the flow and print outputs
+        # Run the flow and log outputs
         flow.run()
         logger.info("Flow execution completed. Outputs:")
         for node_name, outputs in flow.outputs.items():
