@@ -54,6 +54,6 @@ if __name__ == "__main__":
     
     GenPodCrewAI(
         crew = main(), 
-        input_schema = InputSchema(company_domain="http://google.com", company_description="big tech company"),
+        input_schema = InputSchema,
         output_schema = OutputSchema
         ).run(host, int(port))
