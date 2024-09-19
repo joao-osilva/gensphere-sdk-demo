@@ -1,360 +1,493 @@
-import yaml
-import networkx as nx
-import pandas as pd
-import sqlite3
-import requests
-import re
-import json
-from jsonschema import validate, ValidationError
-from importlib import import_module  # Used for dynamic tool imports
+# AgenticFlow.py
 
+import yaml
+import jinja2
+import networkx as nx
+import importlib
+import traceback
+import logging
+from pydantic import BaseModel
+from dotenv import load_dotenv
+import os
+import json
+from openai import OpenAI
+
+# Load environment variables
+load_dotenv()
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 class AgenticFlow:
-    def __init__(self, yaml_file_path, available_classes, openai_api_key, db_table_name=None):
-        """
-        Initializes the GraphExecutor.
+    """
+    Class to parse YAML data, construct an execution graph, and execute nodes.
+    """
 
-        :param yaml_file_path: Path to the YAML file containing node dependencies and executors.
-        :param available_classes: A dictionary mapping class names (strings) to actual class objects.
-        :param openai_api_key: The OpenAI API key for authentication.
-        :param db_table_name: The name of the AWS DynamoDB table to look up executors when needed (optional).
-        """
+    def __init__(self, yaml_data):
+        self.yaml_data = yaml_data
+        self.nodes = {}        # Maps node names to Node instances
+        self.outputs = {}      # Stores outputs from nodes
         self.graph = nx.DiGraph()
-        self.node_classes = {}
-        self.results = {}
-        self.db_table_name = db_table_name
-        self.openai_api_key = openai_api_key
+        self.env = jinja2.Environment()
+        self.variables = {}    # For storing variables across nodes
+        self.variable_producers = {}  # Maps variable names to node names
 
-        # Load graph structure from the YAML file and initialize classes
-        self.load_graph_from_yaml(yaml_file_path, available_classes)
+        # Initialize OpenAI client with API key from environment variable
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OpenAI API key not found. Please set OPENAI_API_KEY environment variable.")
+        self.client = OpenAI(api_key=api_key)
 
-    def load_graph_from_yaml(self, yaml_file_path, available_classes):
+        logger.debug("AgenticFlow initialized.")
+
+    def parse_yaml(self):
         """
-        Loads nodes, their dependencies, and executors from a YAML file, then builds the graph.
-
-        :param yaml_file_path: Path to the YAML file.
-        :param available_classes: A dictionary mapping class names (strings) to class objects.
+        Parses the YAML data and constructs nodes.
         """
-        with open(yaml_file_path, 'r') as file:
-            data = yaml.safe_load(file)
-            nodes = data.get('nodes', {})
+        data = self.yaml_data
+        logger.info("Parsing YAML data")
+        for node_data in data.get('nodes', []):
+            node = Node(node_data)
+            logger.info(f"Adding node '{node.name}' of type '{node.type}'")
+            if node.name in self.nodes:
+                raise ValueError(f"Duplicate node name '{node.name}' found.")
+            self.nodes[node.name] = node
 
-            # Add nodes, their executors, and dependencies to the graph
-            for node, details in nodes.items():
-                executor_name = details.get('executor')
-                executor_args = details.get('executor_args', {})
-                args = executor_args.get('args', [])
-                kwargs = executor_args.get('kwargs', {})
+            # Record variables produced by the node
+            produced_variables = node.get_produced_variables()
+            for var_name in produced_variables:
+                if var_name in self.variable_producers:
+                    raise ValueError(f"Variable '{var_name}' is set by multiple nodes.")
+                self.variable_producers[var_name] = node.name
 
-                # Optional fields that are not used by GraphExecutor
-                description = details.get('description', '')
-                output = details.get('output', '')
+        # Build the execution graph
+        self.build_graph()
 
-                if isinstance(executor_name, str) and self.is_url(executor_name):
-                    # Executor is a direct URL (local or otherwise)
-                    self.node_classes[node] = {
-                        "type": "url",
-                        "executor": executor_name,
-                        "args": args,
-                        "kwargs": kwargs
-                    }
-                elif executor_name == "openai":
-                    # Special case for OpenAI Chat Completions API
-                    self.node_classes[node] = {
-                        "type": "openai",
-                        "args": args,
-                        "kwargs": kwargs
-                    }
-                elif executor_name == "sql_executor":
-                    # SQL Executor that processes data with SQL queries
-                    self.node_classes[node] = {
-                        "type": "sql_executor",
-                        "args": args,
-                        "kwargs": kwargs
-                    }
-                elif executor_name == "pandas_executor":
-                    # Pandas executor that processes DataFrame methods dynamically
-                    self.node_classes[node] = {
-                        "type": "pandas_executor",
-                        "args": args,
-                        "kwargs": kwargs
-                    }
-                elif executor_name in available_classes:
-                    # Initialize the executor class with the provided arguments
-                    self.node_classes[node] = {
-                        "type": "class",
-                        "executor": available_classes[executor_name](*args, **kwargs),
-                    }
+    def build_graph(self):
+        """
+        Builds the execution graph based on node dependencies.
+        """
+        logger.info("Building execution graph")
+        for node in self.nodes.values():
+            self.graph.add_node(node.name)
+            logger.debug(f"Added node '{node.name}' to graph")
+
+        for node in self.nodes.values():
+            dependencies = node.get_dependencies()
+            logger.debug(f"Node '{node.name}' dependencies: {dependencies}")
+            for dep in dependencies:
+                if dep in self.nodes:
+                    self.graph.add_edge(dep, node.name)
+                    logger.debug(f"Added edge from node '{dep}' to '{node.name}'")
+                elif dep in self.variable_producers:
+                    producer_node = self.variable_producers[dep]
+                    self.graph.add_edge(producer_node, node.name)
+                    logger.debug(f"Added edge from variable producer '{producer_node}' to '{node.name}'")
                 else:
-                    # If DynamoDB lookup is not being used, raise an error for unknown executors
-                    raise ValueError(f"Executor '{executor_name}' not found in available classes or known sources.")
+                    logger.error(f"Node '{node.name}' depends on undefined node or variable '{dep}'")
+                    raise ValueError(f"Node '{node.name}' depends on undefined node or variable '{dep}'.")
+        # Check for cycles
+        if not nx.is_directed_acyclic_graph(self.graph):
+            logger.error("The execution graph has cycles. Cannot proceed.")
+            raise ValueError("The execution graph has cycles. Cannot proceed.")
 
-                # Add dependencies as edges in the graph
-                dependencies = details.get('dependencies', [])
-                for dependency in dependencies:
-                    self.graph.add_edge(dependency, node)
-
-    def is_url(self, value):
+    def run(self):
         """
-        Checks if a value is a URL string.
-
-        :param value: The value to check.
-        :return: True if the value is a URL, False otherwise.
+        Executes the nodes in topological order.
         """
-        # Ensure the value is a string before checking for URL patterns
-        return isinstance(value, str) and (value.startswith("http://") or value.startswith("https://"))
+        try:
+            execution_order = list(nx.topological_sort(self.graph))
+            logger.info(f"Execution order: {execution_order}")
+        except nx.NetworkXUnfeasible:
+            logger.error("Graph has cycles, cannot proceed.")
+            raise Exception("Graph has cycles, cannot proceed.")
 
-    def substitute_placeholders(self, value, results, convert_to_string=False):
-        """
-        Substitutes placeholders in a value with corresponding results.
+        for node_name in execution_order:
+            node = self.nodes[node_name]
+            node.set_flow(self)  # Set the reference to the AgenticFlow instance
 
-        :param value: The value containing placeholders (could be string, list, or dict).
-        :param results: The dictionary containing results of executed nodes.
-        :param convert_to_string: If True, converts the result to string when substituting.
-        :return: The value with placeholders replaced with actual results.
+            # Render parameters
+            try:
+                logger.info(f"Rendering parameters for node '{node_name}'")
+                params = node.render_params(self.outputs, self.env)
+                logger.debug(f"Parameters for node '{node_name}': {params}")
+            except Exception as e:
+                logger.error(f"Error rendering params for node '{node_name}': {e}")
+                traceback.print_exc()
+                continue  # Skip execution of this node
+
+            # Execute node
+            try:
+                logger.info(f"Executing node '{node_name}'")
+                outputs = node.execute(params)
+                # Validate outputs
+                if not isinstance(outputs, dict):
+                    raise ValueError(f"Node '{node_name}' did not return a dictionary of outputs.")
+                expected_outputs = set(node.outputs)
+                actual_outputs = set(outputs.keys())
+                if expected_outputs != actual_outputs:
+                    raise ValueError(
+                        f"Node '{node_name}' outputs {actual_outputs} do not match expected outputs {expected_outputs}."
+                    )
+                # Save outputs
+                self.outputs[node_name] = outputs
+                logger.info(f"Outputs of node '{node_name}': {outputs}")
+            except Exception as e:
+                logger.error(f"Error executing node '{node_name}': {e}")
+                traceback.print_exc()
+                continue  # Skip saving outputs for this node
+
+class Node:
+    """
+    Represents an operation node in the execution graph.
+    """
+
+    def __init__(self, node_data):
+        self.name = node_data['name']
+        self.type = node_data['type']
+        self.node_data = node_data
+        self.outputs = node_data.get('outputs', [])
+        self.flow = None  # Reference to the AgenticFlow instance
+        self.logger = logging.getLogger(f"{__name__}.{self.name}")
+
+    def set_flow(self, flow):
         """
-        if isinstance(value, str):
-            pattern = re.compile(r"{{\s*(\w+)\s*}}")
-            matches = pattern.findall(value)
-            for match in matches:
-                if match in results:
-                    replacement = results[match]
-                    # Convert to string only if explicitly required for OpenAI, otherwise leave as is
-                    replacement = str(replacement) if convert_to_string else replacement
-                    # Only perform replace if the replacement is a string
-                    if isinstance(replacement, str):
-                        value = value.replace(f"{{{{ {match} }}}}", replacement)
-                    else:
-                        return replacement  # Directly return non-string objects like DataFrames
-            return value
-        elif isinstance(value, list):
-            return [self.substitute_placeholders(item, results, convert_to_string) for item in value]
-        elif isinstance(value, dict):
-            return {key: self.substitute_placeholders(val, results, convert_to_string) for key, val in value.items()}
+        Sets the reference to the AgenticFlow instance.
+
+        Args:
+            flow (AgenticFlow): The AgenticFlow instance.
+        """
+        self.flow = flow
+
+    def get_dependencies(self):
+        """
+        Extracts dependencies from the parameters and variables.
+
+        Returns:
+            set: A set of node or variable names that this node depends on.
+        """
+        dependencies = set()
+        params = self.node_data.get('params', {})
+        for value in params.values():
+            dependencies.update(self.extract_dependencies_from_value(value))
+
+        # Handle specific dependencies for different node types
+        if self.type == 'get_variables':
+            # For get_variables nodes, add dependencies from 'variables' field
+            variables = self.node_data.get('variables', {})
+            for var_name in variables.values():
+                dependencies.add(var_name)
+        elif self.type == 'set_variable':
+            # For set_variable nodes, check if 'value' depends on any variables
+            value = params.get('value')
+            if value:
+                dependencies.update(self.extract_dependencies_from_value(value))
+
+        return dependencies
+
+    @staticmethod
+    def extract_dependencies_from_value(value):
+        """
+        Extracts node and variable names from templated values.
+
+        Args:
+            value: The parameter value to inspect.
+
+        Returns:
+            set: A set of node or variable names referenced in the value.
+        """
+        import re
+        pattern = r"\{\{\s*([\w_\.]+)\s*\}\}"
+        matches = re.findall(pattern, str(value))
+        dependencies = set()
+        for match in matches:
+            var_parts = match.split('.')
+            dependencies.add(var_parts[0])
+        return dependencies
+
+    def get_produced_variables(self):
+        """
+        Returns a list of variables produced by this node.
+        """
+        if self.type == 'set_variable':
+            return [self.node_data['variable_name']]
         else:
-            return value
+            return []
 
-    def substitute_kwargs(self, kwargs, results, convert_to_string=False):
+    def render_params(self, outputs, env):
         """
-        Substitutes placeholder references in kwargs with actual results from predecessors.
+        Renders the parameters with values from previous outputs.
 
-        :param kwargs: The keyword arguments with placeholders.
-        :param results: The results of previously executed nodes.
-        :param convert_to_string: If True, converts the result to string when substituting.
-        :return: Updated kwargs with placeholders replaced with actual values.
+        Args:
+            outputs (dict): Outputs from previously executed nodes.
+            env (jinja2.Environment): Jinja2 environment for templating.
+
+        Returns:
+            dict: Rendered parameters ready for execution.
         """
-        return {key: self.substitute_placeholders(value, results, convert_to_string) for key, value in kwargs.items()}
+        params = self.node_data.get('params', {})
+        # Build the context with outputs accessible by node name
+        context = {}
+        for node_name, node_outputs in outputs.items():
+            context[node_name] = node_outputs
+        # Add variables to context
+        context.update(self.flow.variables)
+        # Render each parameter individually
+        rendered_params = {}
+        for key, value in params.items():
+            if isinstance(value, str):
+                # Check if the value is a simple variable reference
+                import re
+                simple_var_pattern = r"^\{\{\s*([\w_\.]+)\s*\}\}$"
+                match = re.match(simple_var_pattern, value)
+                if match:
+                    var_name = match.group(1)
+                    # Split var_name to access nested variables
+                    var_parts = var_name.split('.')
+                    obj = context
+                    try:
+                        for part in var_parts:
+                            if isinstance(obj, dict):
+                                obj = obj[part]
+                            else:
+                                obj = getattr(obj, part)
+                        rendered_params[key] = obj
+                    except (KeyError, AttributeError, TypeError) as e:
+                        # Variable not found in context
+                        raise ValueError(f"Variable '{var_name}' not found in context.") from e
+                else:
+                    # Use Jinja2 rendering for other cases
+                    template = env.from_string(value)
+                    rendered_value = template.render(**context)
+                    rendered_params[key] = rendered_value
+            else:
+                # Non-string params are used as is
+                rendered_params[key] = value
+        return rendered_params
 
-    def run_node(self, node):
+    def execute(self, params):
         """
-        Runs a single node's executor and returns the result.
+        Executes the node based on its type and parameters.
 
-        :param node: The node to run.
-        :return: The result of the node's execution.
+        Args:
+            params (dict): Parameters for the node execution.
+
+        Returns:
+            dict: Outputs from the node execution.
         """
-        result = None  # Initialize result with a default value to avoid unassigned access errors
-
-        # Get predecessors (dependencies) of the current node
-        predecessors = list(self.graph.predecessors(node))
-
-        # Collect outputs of the dependencies
-        inputs = [self.results[predecessor] for predecessor in predecessors]
-
-        # Determine the type of executor and execute accordingly
-        executor_info = self.node_classes[node]
-        # Only convert to string for OpenAI executor; otherwise, pass outputs directly
-        convert_to_string = executor_info["type"] == "openai"
-        kwargs = self.substitute_kwargs(executor_info.get("kwargs", {}), self.results, convert_to_string)
-
-        # Correct handling for cases where there are no predecessors (inputs)
-        if executor_info["type"] == "class":
-            # Call the run method of the class instance
-            result = executor_info["executor"].run(*inputs, **kwargs)
-        elif executor_info["type"] == "sql_executor":
-            # Handle the case where sql_executor might need a default input
-            # Ensure 'table_path' is not duplicated in kwargs
-            table_path = inputs[0] if inputs else kwargs.pop("table_path", None)
-            if table_path is None or (isinstance(table_path, str) and not table_path.strip()):
-                raise ValueError("Table path is required for SQL execution and must not be empty.")
-            if "table_path" in kwargs:
-                del kwargs["table_path"]  # Ensure table_path is removed from kwargs
-            result = self.run_sql_executor(table_path=table_path, **kwargs)
-        elif executor_info["type"] == "pandas_executor":
-            # Handle the case where pandas_executor might need a default input
-            input_df = inputs[0] if inputs else None
-            result = self.run_pandas_executor(input_df=input_df, **kwargs)
-        elif executor_info["type"] == "openai":
-            # Run OpenAI executor, no specific input dependency required
-            result = self.run_openai_executor(**kwargs)
+        self.logger.debug(f"Executing node of type '{self.type}' with params: {params}")
+        if self.type == 'function_call':
+            return self.execute_function_call(params)
+        elif self.type == 'llm_service':
+            return self.execute_llm_service(params)
+        elif self.type == 'set_variable':
+            return self.execute_set_variable(params)
+        elif self.type == 'get_variable':
+            return self.execute_get_variable(params)
+        elif self.type == 'get_variables':
+            return self.execute_get_variables(params)
         else:
-            # Handle cases where the executor type is not recognized
-            raise ValueError(f"Unknown executor type for node '{node}'.")
+            raise NotImplementedError(f"Type '{self.type}' not implemented for node '{self.name}'.")
 
-        # Save the result
-        self.results[node] = result
+    def execute_function_call(self, params):
+        """
+        Executes a function call node.
+
+        Args:
+            params (dict): Parameters for the function.
+
+        Returns:
+            dict: Dictionary of outputs from the function.
+        """
+        try:
+            module = importlib.import_module('functions')
+            func = getattr(module, self.node_data['function'])
+        except ImportError as e:
+            raise ImportError(f"Error importing module 'functions': {e}")
+        except AttributeError as e:
+            raise AttributeError(f"Function '{self.node_data['function']}' not found in 'functions' module.")
+
+        # Execute function with parameters
+        result = func(**params)
+        if not isinstance(result, dict):
+            raise ValueError(f"Function '{self.node_data['function']}' should return a dictionary of outputs.")
+        # Ensure result keys match outputs
+        expected_outputs = set(self.outputs)
+        actual_outputs = set(result.keys())
+        if expected_outputs != actual_outputs:
+            raise ValueError(
+                f"Function outputs {actual_outputs} do not match expected outputs {expected_outputs}."
+            )
         return result
 
-    def run_sql_executor(self, table_path=None, query=None, output_path=None):
+    def execute_llm_service(self, params):
         """
-        Executes an SQL query on a table provided by a path or DataFrame.
+        Executes an LLM service node.
 
-        :param table_path: The path to the table (can be an output of another node, local file, or database API address or DataFrame).
-        :param query: The SQL query to run.
-        :param output_path: Optional path to save the output table.
-        :return: Resulting DataFrame from the query.
+        Args:
+            params (dict): Parameters for the LLM service.
+
+        Returns:
+            dict: Dictionary of outputs from the LLM service.
         """
-        # Ensure table_path is correctly checked and not ambiguously evaluated
-        if table_path is None:
-            raise ValueError("Table path is required for SQL execution.")
-
-        # Check if table_path is a DataFrame directly passed as output from another node
-        if isinstance(table_path, pd.DataFrame):
-            df = table_path
-        elif self.is_url(table_path):
-            raise NotImplementedError("Accessing remote databases via API is not implemented in this demo.")
-        elif isinstance(table_path, str) and table_path.strip():
-            try:
-                df = pd.read_csv(table_path)  # Read the CSV file
-            except Exception as e:
-                print(f"Error reading table from path {table_path}: {e}")
-                raise
+        service = self.node_data['service']
+        if service == 'openai':
+            return self.execute_openai_service(params)
         else:
-            raise ValueError(f"Invalid table path type: {type(table_path)}. Expected DataFrame, URL, or file path.")
+            raise NotImplementedError(f"LLM service '{service}' not implemented for node '{self.name}'.")
 
-        try:
-            conn = sqlite3.connect(":memory:")  # Use in-memory SQLite database
-            table_name = "data_table"  # Change table name to avoid SQL reserved keyword conflict
-            df.to_sql(table_name, conn, index=False, if_exists='replace')  # Load into SQL with new table name
-            result_df = pd.read_sql_query(query, conn)  # Execute the query
-            conn.close()
-
-            # Save result if output path is provided
-            if output_path:
-                result_df.to_csv(output_path, index=False)
-
-            return result_df
-        except Exception as e:
-            print(f"Error executing SQL: {e}")
-            raise
-
-    def run_pandas_executor(self, input_df=None, method=None, input_path=None, output_path=None):
+    def execute_openai_service(self, params):
         """
-        Executes a specified method on a Pandas DataFrame and optionally saves the output.
+        Executes an OpenAI LLM service call using the chat completions API.
 
-        :param input_df: The DataFrame to modify, or None if loading from input_path.
-        :param method: A string representing the Pandas method to apply to the DataFrame.
-        :param input_path: Optional path to load the input DataFrame.
-        :param output_path: Optional path to save the modified DataFrame.
-        :return: Modified DataFrame after applying the method.
+        Args:
+            params (dict): Parameters for the LLM service.
+
+        Returns:
+            dict: Dictionary of outputs from the LLM service.
         """
-        try:
-            # Load DataFrame from input_path if no input DataFrame is provided
-            if input_df is None and input_path:
-                df = pd.read_csv(input_path)
-                print(f"DataFrame loaded from {input_path}")
-            else:
-                # Use the passed DataFrame if no input path is specified
-                df = input_df
+        model = self.node_data.get('model')
+        function_call = self.node_data.get('function_call')
 
-            if df is None:
-                raise ValueError("No DataFrame provided for pandas_executor execution.")
+        if function_call:
+            function_name = function_call['name']
+            # Use the function schema defined in the function_schemas module
+            function_schema = get_function_schema(function_name)
 
-            # Dynamically apply the method to the DataFrame
-            if method.startswith(".apply"):
-                # Handling the .apply() case safely
-                df = df.apply(eval(method[6:]))  # Apply the method by evaluating the lambda function part safely
-            else:
-                # Use getattr to safely apply the method to the DataFrame
-                method_name = method.split('(')[0].lstrip('.')
-                if hasattr(df, method_name):
-                    df = getattr(df, method_name)()
+            # Prepare the tools (function definitions)
+            tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": function_name,
+                        "description": function_schema.get('description', ''),
+                        "parameters": function_schema.get('parameters', {}),
+                    },
+                }
+            ]
 
-            # Save the result to the specified path if provided
-            if output_path:
-                df.to_csv(output_path, index=False)
-                print(f"DataFrame saved to {output_path}")
+            # Prepare messages
+            messages = [
+                {"role": "user", "content": params['prompt']}
+            ]
 
-            return df
-        except Exception as e:
-            print(f"Error applying method to DataFrame: {e}")
-            raise
-
-    def run_openai_executor(self, model, messages, structured_output=False, schema=None, tool_name=None):
-        """
-        Makes an API call to the OpenAI Chat Completions API, optionally using a tool.
-
-        :param model: The model to use (e.g., "gpt-3.5-turbo").
-        :param messages: A list of message dictionaries for the API call.
-        :param structured_output: If True, parses the response as structured output (JSON).
-        :param schema: The schema to validate the structured output against.
-        :param tool_name: Optional tool name to use for calculations or enhancements.
-        :return: The response from the API, parsed if structured output is expected.
-        """
-        headers = {
-            "Authorization": f"Bearer {self.openai_api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": model,
-            "messages": messages
-        }
-
-        # Dynamically load and execute the tool if specified
-        tool_result = None
-        if tool_name:
-            try:
-                tool_module = import_module("tools")  # Import the module where the tool is defined
-                tool_function = getattr(tool_module, tool_name)  # Get the tool function by name
-                tool_result = tool_function(10)  # Example of how tool might be used with a placeholder input
-                print(f"Tool '{tool_name}' executed with result: {tool_result}")
-            except (ModuleNotFoundError, AttributeError) as e:
-                print(f"Error loading tool '{tool_name}': {e}")
-
-        try:
-            response = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers=headers,
-                json=payload
+            # Call OpenAI API
+            response = self.flow.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto"
             )
-            response.raise_for_status()
-            response_content = response.json()["choices"][0]["message"]["content"]
 
-            # Handle structured output parsing and schema validation if specified
-            if structured_output:
-                try:
-                    result = json.loads(response_content)
-                    if schema:
-                        # Validate the response against the provided schema
-                        validate(instance=result, schema=schema)
-                    print(f"Structured Output from OpenAI: {result}")
-                    return result
-                except json.JSONDecodeError:
-                    print(f"Failed to parse structured output. Returning raw response.")
-                    return response_content
-                except ValidationError as ve:
-                    print(f"Schema validation error: {ve}")
-                    raise ValueError("Output from OpenAI did not match the expected schema.")
+            # Handle response
+            assistant_message = response.choices[0].message
+
+            if assistant_message.tool_calls:
+                tool_call = assistant_message.tool_calls[0]
+                function_name = tool_call.function.name
+                arguments = json.loads(tool_call.function.arguments)
+
+                # Optionally, execute the function here
+                # For now, we can return the function call arguments as the output
+                return {self.outputs[0]: arguments}
             else:
-                print(f"Output from OpenAI: {response_content}")
-                return response_content
-        except Exception as e:
-            print(f"Error during OpenAI API call: {e}")
-            raise
+                # The model didn't call a function, return its content
+                result = assistant_message.content
+                if len(self.outputs) != 1:
+                    raise ValueError(
+                        f"Node '{self.name}' expects {len(self.outputs)} outputs, but OpenAI service returned 1."
+                    )
+                return {self.outputs[0]: result}
+        else:
+            # Simple prompt completion
+            messages = [{"role": "user", "content": params['prompt']}]
+            response = self.flow.client.chat.completions.create(
+                model=model,
+                messages=messages
+            )
+            assistant_message = response.choices[0].message
+            result = assistant_message.content
+            if len(self.outputs) != 1:
+                raise ValueError(
+                    f"Node '{self.name}' expects {len(self.outputs)} outputs, but OpenAI service returned 1."
+                )
+            return {self.outputs[0]: result}
 
-    def execute(self):
+    def execute_set_variable(self, params):
         """
-        Executes the nodes in the graph sequentially in topological order.
+        Sets a variable in the flow's variable store.
+
+        Args:
+            params (dict): Should contain 'value'.
+
+        Returns:
+            dict: Empty dictionary as no outputs.
         """
-        try:
-            # Perform topological sort to get the order of execution
-            sorted_nodes = list(nx.topological_sort(self.graph))
-        except nx.NetworkXUnfeasible:
-            raise ValueError("The graph contains a cycle and is not a DAG.")
+        variable_name = self.node_data['variable_name']
+        value = params['value']
+        # Store the variable in the AgenticFlow's variable store
+        self.flow.variables[variable_name] = value
+        return {}
 
-        # Execute each node sequentially in the sorted order
-        for node in sorted_nodes:
-            try:
-                self.run_node(node)
-            except Exception as e:
-                print(f"Error executing node {node}: {e}")
+    def execute_get_variable(self, params):
+        """
+        Retrieves a variable from the flow's variable store.
 
+        Args:
+            params (dict): Not used.
+
+        Returns:
+            dict: Dictionary containing the variable's value under the specified output name.
+        """
+        variable_name = self.node_data['variable_name']
+        value = self.flow.variables.get(variable_name)
+        if value is None:
+            raise ValueError(f"Variable '{variable_name}' not found.")
+        output_name = self.outputs[0] if self.outputs else 'value'
+        return {output_name: value}
+
+    def execute_get_variables(self, params):
+        """
+        Retrieves multiple variables from the flow's variable store.
+
+        Args:
+            params (dict): Not used.
+
+        Returns:
+            dict: Dictionary containing the variables' values under the specified output names.
+        """
+        variables = self.node_data['variables']  # This is a dict mapping output names to variable names
+        result = {}
+        for output_name, variable_name in variables.items():
+            value = self.flow.variables.get(variable_name)
+            if value is None:
+                raise ValueError(f"Variable '{variable_name}' not found.")
+            result[output_name] = value
+        return result
+
+def get_function_schema(function_name):
+    """
+    Retrieves the function schema for a function by name.
+
+    Args:
+        function_name (str): The name of the function schema.
+
+    Returns:
+        dict: The function definition, including name, description, parameters.
+    """
+    try:
+        module = importlib.import_module('function_schemas')
+        schema_class = getattr(module, function_name)
+        # Get the JSON schema from Pydantic
+        schema = schema_class.schema()
+        # Build the function definition
+        function_def = {
+            "name": function_name,
+            "description": schema.get('description', ''),
+            "parameters": schema
+        }
+        return function_def
+    except ImportError as e:
+        raise ImportError(f"Error importing module 'function_schemas': {e}")
+    except AttributeError as e:
+        raise AttributeError(f"Function schema '{function_name}' not found in 'function_schemas' module.")

@@ -1,0 +1,17 @@
+# data_processing_flow.yaml
+
+nodes:
+  - name: process_data_step
+    type: function_call
+    function: process_csv_data
+    params:
+      data: "{{ data }}"
+    outputs:
+      - processed_data
+
+  - name: output_processed_data
+    type: set_variable
+    variable_name: "processed_data"
+    params:
+      value: "{{ process_data_step.processed_data }}"
+    outputs: []

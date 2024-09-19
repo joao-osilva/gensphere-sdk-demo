@@ -1,0 +1,37 @@
+# sample.yaml
+
+nodes:
+  - name: read_csv
+    type: function_call
+    function: read_csv_file
+    params:
+      file_path: "data.csv"
+    outputs:
+      - data
+
+  - name: data_processing
+    type: yml_flow
+    yml_file: data_processing_flow.yaml
+    params:
+      data: "{{ read_csv.data }}"
+    outputs:
+      - processed_data
+
+  - name: prepare_analysis
+    type: function_call
+    function: format_analysis_request
+    params:
+      processed_data: "{{ data_processing.processed_data }}"
+    outputs:
+      - analysis_prompt
+
+  - name: analyze_data
+    type: llm_service
+    service: openai
+    model: "gpt-4o"
+    function_call:
+      name: AnalyzeDataFunction
+    params:
+      prompt: "{{ prepare_analysis.analysis_prompt }}"
+    outputs:
+      - analysis_result
