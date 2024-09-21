@@ -38,13 +38,28 @@ nodes:
   params:
     processed_data: '{{ data_processing.processed_data }}'
   type: function_call
-- function_call:
-    name: AnalyzeDataFunction
-  model: gpt-4o
+- model: gpt-4o-2024-08-06
   name: analyze_data
   outputs:
   - analysis_result
   params:
-    prompt: '{{ prepare_analysis.analysis_prompt }}'
+    prompt: You need to do three things. 1- Find a major new headline that happened
+      in Brazil 2- Get the exhange rate from BRL to USD 3- analyze the table {{ prepare_analysis.analysis_prompt
+      }} 4- In this table, value1, value 2 refer to value of items in USD. Convert
+      that to BRL, and add new columns with BRL price.Rename the other columns to
+      USD price. Answer in table format
   service: openai
+  tools:
+  - get_exchange_rate
+  - search_internet
+  type: llm_service
+- model: gpt-4o-2024-08-06
+  name: generate_report
+  outputs:
+  - report
+  params:
+    prompt: 'Generate a summary report based on the analysis: {{ analyze_data.analysis_result
+      }}'
+  service: openai
+  structured_output_schema: ReportSchema
   type: llm_service

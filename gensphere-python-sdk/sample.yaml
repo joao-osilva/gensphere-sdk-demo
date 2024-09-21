@@ -28,10 +28,26 @@ nodes:
   - name: analyze_data
     type: llm_service
     service: openai
-    model: "gpt-4o"
-    function_call:
-      name: AnalyzeDataFunction
+    model: "gpt-4o-2024-08-06"
+    tools:
+      - get_exchange_rate
+      - search_internet
     params:
-      prompt: "{{ prepare_analysis.analysis_prompt }}"
+      prompt: "You need to do three things.
+      1- Find a major new headline that happened in Brazil
+      2- Get the exhange rate from BRL to USD
+      3- analyze the table {{ prepare_analysis.analysis_prompt }}
+      4- In this table, value1, value 2 refer to value of items in USD. Convert that to BRL, and add new
+      columns with BRL price.Rename the other columns to USD price. Answer in table format"
     outputs:
       - analysis_result
+
+  - name: generate_report
+    type: llm_service
+    service: openai
+    model: "gpt-4o-2024-08-06"
+    structured_output_schema: ReportSchema
+    params:
+      prompt: "Generate a summary report based on the analysis: {{ analyze_data.analysis_result }}"
+    outputs:
+      - report

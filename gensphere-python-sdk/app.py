@@ -8,7 +8,7 @@ import yaml
 import graph_builder
 import inspect
 import functions  # Your functions.py
-import function_schemas  # Your functions_schema.py
+import structured_output_schema  # Your functions_schema.py
 
 app = dash.Dash(__name__)
 server = app.server

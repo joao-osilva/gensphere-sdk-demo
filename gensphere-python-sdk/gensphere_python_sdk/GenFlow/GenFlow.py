@@ -10,7 +10,10 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
 import json
+import openai
 from openai import OpenAI
+import inspect
+from typing import Union
 
 # Load environment variables
 load_dotenv()
@@ -32,7 +35,7 @@ class GenFlow:
         self.variables = {}    # For storing variables across nodes
         self.variable_producers = {}  # Maps variable names to node names
 
-        # Initialize OpenAI client with API key from environment variable
+        # Initialize OpenAI API key from environment variable
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OpenAI API key not found. Please set OPENAI_API_KEY environment variable.")
@@ -307,6 +310,14 @@ class Node:
         except AttributeError as e:
             raise AttributeError(f"Function '{self.node_data['function']}' not found in 'functions' module.")
 
+        # Check if function has proper docstrings and type annotations
+        if not func.__doc__:
+            raise ValueError(f"Function '{self.node_data['function']}' must have a docstring.")
+        signature = inspect.signature(func)
+        for param in signature.parameters.values():
+            if param.annotation == inspect.Parameter.empty:
+                raise ValueError(f"Parameter '{param.name}' in function '{func.__name__}' lacks type annotation.")
+
         # Execute function with parameters
         result = func(**params)
         if not isinstance(result, dict):
@@ -346,61 +357,171 @@ class Node:
         Returns:
             dict: Dictionary of outputs from the LLM service.
         """
+        import inspect
+
         model = self.node_data.get('model')
-        function_call = self.node_data.get('function_call')
+        tools = self.node_data.get('tools')
+        structured_output_schema_name = self.node_data.get('structured_output_schema')
 
-        if function_call:
-            function_name = function_call['name']
-            # Use the function schema defined in the function_schemas module
-            function_schema = get_function_schema(function_name)
+        # Check if both 'tools' and 'structured_output_schema' are defined
+        if tools and structured_output_schema_name:
+            raise ValueError(f"Node '{self.name}' cannot have both 'tools' and 'structured_output_schema' defined.")
 
-            # Prepare the tools (function definitions)
-            tools = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": function_name,
-                        "description": function_schema.get('description', ''),
-                        "parameters": function_schema.get('parameters', {}),
-                    },
-                }
-            ]
+        # Prepare messages
+        messages = [
+            {"role": "user", "content": params['prompt']}
+        ]
 
-            # Prepare messages
-            messages = [
-                {"role": "user", "content": params['prompt']}
-            ]
+        if tools:
+            # Function calling
+            # Prepare the function definitions
+            function_definitions = []
+            available_functions = {}
+            for tool_name in tools:
+                # Check if function exists in functions.py
+                try:
+                    module = importlib.import_module('functions')
+                    func = getattr(module, tool_name)
+                except ImportError as e:
+                    raise ImportError(f"Error importing module 'functions': {e}")
+                except AttributeError as e:
+                    raise AttributeError(f"Function '{tool_name}' not found in 'functions' module.")
+
+                # Check if function has proper docstrings and type annotations
+                if not func.__doc__:
+                    raise ValueError(f"Function '{tool_name}' must have a docstring.")
+                signature = inspect.signature(func)
+                for param in signature.parameters.values():
+                    if param.annotation == inspect.Parameter.empty:
+                        raise ValueError(f"Parameter '{param.name}' in function '{func.__name__}' lacks type annotation.")
+
+                # Get the function schema from the function object
+                function_schema = get_function_schema(func)
+
+                # Build the function definition
+                function_definitions.append(function_schema)
+
+                # Add to available functions
+                available_functions[tool_name] = func
 
             # Call OpenAI API
             response = self.flow.client.chat.completions.create(
                 model=model,
                 messages=messages,
-                tools=tools,
-                tool_choice="auto"
+                tools=function_definitions,
+                tool_choice="auto"  # or "auto"
             )
 
-            # Handle response
             assistant_message = response.choices[0].message
+            messages.append(assistant_message)
 
+            # Check if the assistant wants to call a function
             if assistant_message.tool_calls:
-                tool_call = assistant_message.tool_calls[0]
-                function_name = tool_call.function.name
-                arguments = json.loads(tool_call.function.arguments)
+                tool_calls = assistant_message.tool_calls
+                for tool_call in tool_calls:
+                    function_name = tool_call.function.name
+                    function_to_call=available_functions[function_name]
+                    if not function_to_call:
+                        raise ValueError(f"Function '{function_name}' is not available.")
+                    function_args = tool_call.function.arguments
 
-                # Optionally, execute the function here
-                # For now, we can return the function call arguments as the output
-                return {self.outputs[0]: arguments}
+                    # Parse the arguments
+                    try:
+                        arguments = json.loads(function_args)
+                    except json.JSONDecodeError as e:
+                        raise ValueError(f"Failed to parse function arguments: {e}")
+
+                    # Get the function signature and call the function with given arguments
+                    try:
+                        sig = inspect.signature(function_to_call)
+                        call_args = {}
+                        for k, v in sig.parameters.items():
+                            if k in arguments:
+                                call_args[k] = arguments[k]
+                            elif v.default != inspect.Parameter.empty:
+                                call_args[k] = v.default
+                            else:
+                                raise ValueError(f"Missing required argument '{k}' for function '{function_name}'.")
+
+                        self.logger.info(f"Calling function '{function_name}' with arguments {call_args}")
+                        function_response = function_to_call(**call_args)
+                        self.logger.info(f"Function '{function_name}' returned: {function_response}")
+                    except Exception as e:
+                        raise Exception(f"Error executing function '{function_name}': {e}")
+
+                    # Append the function's response to messages
+                    tool_message = {
+                        "tool_call_id":tool_call.id,
+                        "role": "tool",
+                        "name": function_name,
+                        "content": str(function_response)
+                    }
+                    messages.append(tool_message)
+
+                # Call the model again to get the final response
+                second_response = self.flow.client.chat.completions.create(
+                    model=model,
+                    messages=messages
+                )
+                assistant_final_message = second_response.choices[0].message
+                result = assistant_final_message.content
+
+                if len(self.outputs) != 1:
+                    raise ValueError(
+                        f"Node '{self.name}' expects {len(self.outputs)} outputs, but OpenAI service returned 1."
+                    )
+                return {self.outputs[0]: result}
+
             else:
-                # The model didn't call a function, return its content
+                # The assistant did not call any function
                 result = assistant_message.content
                 if len(self.outputs) != 1:
                     raise ValueError(
                         f"Node '{self.name}' expects {len(self.outputs)} outputs, but OpenAI service returned 1."
                     )
                 return {self.outputs[0]: result}
+
+        elif structured_output_schema_name:
+            # Structured outputs
+            # Get the schema from structured_output_schema.py
+            try:
+                module = importlib.import_module('structured_output_schema')
+                schema_class = getattr(module, structured_output_schema_name)
+            except ImportError as e:
+                raise ImportError(f"Error importing module 'structured_output_schema': {e}")
+            except AttributeError as e:
+                raise AttributeError(f"Schema '{structured_output_schema_name}' not found in 'structured_output_schema' module.")
+
+            # Call OpenAI API with response_format
+            try:
+                response = self.flow.client.beta.chat.completions.parse(
+                    model=model,
+                    messages=messages,
+                    response_format=schema_class,
+                )
+
+                # Get the parsed result
+                assistant_message = response.choices[0].message
+                if assistant_message.refusal:
+                    raise Exception(f"OpenAI refusal for structured outputs on node '{self.name}'. Refusal:{assistant_message.refusal}")
+                else:
+                    result = assistant_message.parsed
+            except Exception as e:
+                if type(e) == openai.LengthFinishReasonError:
+                    raise Exception(f"Too many tokens were passed to openAi during structured output generation on node {self.name}")
+                else:
+                    raise Exception(f"Failed to parse structured output for node '{self.name}'.")
+            if result is None:
+                raise ValueError(f"Failed to parse structured output for node '{self.name}'. result coming as None")
+
+            if len(self.outputs) != 1:
+                raise ValueError(
+                    f"Node '{self.name}' expects {len(self.outputs)} outputs, but OpenAI service returned 1."
+                )
+            return {self.outputs[0]: result}
+
         else:
             # Simple prompt completion
-            messages = [{"role": "user", "content": params['prompt']}]
             response = self.flow.client.chat.completions.create(
                 model=model,
                 messages=messages
@@ -465,29 +586,74 @@ class Node:
             result[output_name] = value
         return result
 
-def get_function_schema(function_name):
+def get_function_schema(func):
     """
-    Retrieves the function schema for a function by name.
+    Retrieves the function schema for a function object by inspecting its signature and docstring.
 
     Args:
-        function_name (str): The name of the function schema.
+        func (function): The function object.
 
     Returns:
         dict: The function definition, including name, description, parameters.
     """
-    try:
-        module = importlib.import_module('function_schemas')
-        schema_class = getattr(module, function_name)
-        # Get the JSON schema from Pydantic
-        schema = schema_class.schema()
-        # Build the function definition
-        function_def = {
-            "name": function_name,
-            "description": schema.get('description', ''),
-            "parameters": schema
-        }
-        return function_def
-    except ImportError as e:
-        raise ImportError(f"Error importing module 'function_schemas': {e}")
-    except AttributeError as e:
-        raise AttributeError(f"Function schema '{function_name}' not found in 'function_schemas' module.")
+    import inspect
+
+    function_name = func.__name__
+    docstring = inspect.getdoc(func) or ""
+    signature = inspect.signature(func)
+
+    # Build parameters schema
+    parameters = {
+        "type": "object",
+        "properties": {},
+        "required": []
+    }
+
+    type_mapping = {
+        str: "string",
+        int: "integer",
+        float: "number",
+        bool: "boolean",
+        dict: "object",
+        list: "array",
+    }
+
+    for param_name, param in signature.parameters.items():
+        param_type = param.annotation
+        if param_type == inspect.Parameter.empty:
+            raise ValueError(f"Parameter '{param_name}' in function '{function_name}' is missing type annotation.")
+
+        # Handle typing.Optional and typing.Union
+        if getattr(param_type, '__origin__', None) is Union:
+            # Get the non-None type
+            param_type = [t for t in param_type.__args__ if t is not type(None)][0]
+
+        if hasattr(param_type, '__origin__') and param_type.__origin__ == list:
+            item_type = param_type.__args__[0]
+            item_type_name = type_mapping.get(item_type, "string")
+            param_schema = {
+                "type": "array",
+                "items": {"type": item_type_name}
+            }
+        else:
+            param_type_name = type_mapping.get(param_type, "string")
+            param_schema = {
+                "type": param_type_name
+            }
+
+        # Optionally, extract parameter description from docstring (not implemented here)
+
+        parameters["properties"][param_name] = param_schema
+
+        if param.default == inspect.Parameter.empty:
+            parameters["required"].append(param_name)
+
+    function_def = {"type": "function",
+                    "function": {
+                        "name": function_name,
+                        "description": docstring,
+                        "parameters": parameters
+                                }
+                    }
+
+    return function_def
