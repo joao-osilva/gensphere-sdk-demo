@@ -29,9 +29,9 @@ default_stylesheet = [
     {'selector': 'node',
      'style': {
          'label': 'data(label)',
-         'width': '60px',
-         'height': '60px',
-         'font-size': '12px',
+         'width': '100px',
+         'height': '100px',
+         'font-size': '16px',
          'background-color': '#888',
          'color': '#fff',
          'text-valign': 'center',
@@ -46,7 +46,11 @@ default_stylesheet = [
     {'selector': '.subflow-node',
      'style': {'background-color': '#FFDC00'}},
     {'selector': '.entrypoint-node',
-     'style': {'shape': 'diamond', 'border-width': '2px', 'border-color': '#fff'}},
+     'style': {
+         'shape': 'rectangle',  # Changed from 'diamond' to 'rectangle'
+         'border-width': '2px',
+         'border-color': '#fff'
+     }},
     {'selector': '.output-node',
      'style': {'shape': 'star', 'border-width': '2px', 'border-color': '#fff'}},
     {'selector': 'edge',
@@ -56,14 +60,15 @@ default_stylesheet = [
          'target-arrow-color': '#fff',
          'arrow-scale': 2,
          'width': 2,
-         'line-color': '#ccc',
+         'line-color': '#ccc',  # Uniform edge color
      }},
-    {'selector': '.dependency-edge',
-     'style': {'line-color': '#FF4136'}},
-    {'selector': '.parent-edge',
-     'style': {'line-color': '#7FDBFF'}},
-    {'selector': '.subflow-edge',
-     'style': {'line-style': 'dashed', 'line-color': '#FFDC00'}},
+    # Removed specific edge types since all edges have the same color
+    # {'selector': '.dependency-edge',
+    #  'style': {'line-color': '#FF4136'}},
+    # {'selector': '.parent-edge',
+    #  'style': {'line-color': '#7FDBFF'}},
+    # {'selector': '.subflow-edge',
+    #  'style': {'line-style': 'dashed', 'line-color': '#FFDC00'}},
 ]
 
 # Build the initial graph elements
@@ -78,24 +83,121 @@ except Exception as e:
 logger.info(f"Initial elements: {len(elements)}")
 logger.debug(f"Elements: {elements}")
 
+# Define the legend for the node types and shapes
+legend = html.Div([
+    html.H3('Legend', style={'color': '#fff', 'textAlign': 'center'}),
+    html.Div([
+        html.Div([
+            html.Span(style={
+                'display': 'inline-block',
+                'width': '20px',
+                'height': '20px',
+                'backgroundColor': '#0074D9',
+                'marginRight': '10px'
+            }),
+            html.Span('Function Call Node', style={'color': '#fff'})
+        ], style={'marginBottom': '5px'}),
+        html.Div([
+            html.Span(style={
+                'display': 'inline-block',
+                'width': '20px',
+                'height': '20px',
+                'backgroundColor': '#2ECC40',
+                'marginRight': '10px'
+            }),
+            html.Span('LLM Service Node', style={'color': '#fff'})
+        ], style={'marginBottom': '5px'}),
+        html.Div([
+            html.Span(style={
+                'display': 'inline-block',
+                'width': '20px',
+                'height': '20px',
+                'backgroundColor': '#FF851B',
+                'marginRight': '10px'
+            }),
+            html.Span('YAML Flow Node', style={'color': '#fff'})
+        ], style={'marginBottom': '5px'}),
+        html.Div([
+            html.Span(style={
+                'display': 'inline-block',
+                'width': '20px',
+                'height': '20px',
+                'backgroundColor': '#FFDC00',
+                'marginRight': '10px'
+            }),
+            html.Span('Subflow Node', style={'color': '#fff'})
+        ], style={'marginBottom': '5px'}),
+        html.Div([
+            html.Span(style={
+                'display': 'inline-block',
+                'width': '20px',
+                'height': '20px',
+                'backgroundColor': '#888',
+                'marginRight': '10px',
+                'border': '2px solid #fff',
+                'borderRadius': '50%'
+            }),
+            html.Span('Regular Node', style={'color': '#fff'})
+        ], style={'marginBottom': '5px'}),
+        html.Div([
+            html.Span(style={
+                'display': 'inline-block',
+                'width': '20px',
+                'height': '20px',
+                'backgroundColor': '#0074D9',
+                'marginRight': '10px',
+                'border': '2px solid #fff',
+                'borderRadius': '0%',  # Ensures rectangle shape
+            }),
+            html.Span('Entrypoint Node', style={'color': '#fff'})
+        ], style={'marginBottom': '5px'}),
+        html.Div([
+            html.Span(style={
+                'display': 'inline-block',
+                'width': '20px',
+                'height': '20px',
+                'backgroundColor': '#0074D9',
+                'marginRight': '10px',
+                'border': '2px solid #fff',
+                'clipPath': 'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)'
+            }),
+            html.Span('Output Node', style={'color': '#fff'})
+        ], style={'marginBottom': '5px'}),
+        # Removed edge color legends since all edges have the same color
+    ], style={'padding': '10px'})
+], style={
+    'position': 'absolute',
+    'bottom': '10px',
+    'right': '10px',
+    'backgroundColor': '#1e1e1e',
+    'padding': '10px',
+    'border': '1px solid #fff',
+    'borderRadius': '5px',
+    'width': '300px',
+    'zIndex': '1000',  # Ensure legend is on top
+    'color': '#fff'
+})
+
+# Define the layout
 app.layout = html.Div([
     html.H1('GenFlow Workflow Visualizer', style={'color': '#fff'}),
     html.Div([
         html.Label('YAML File Path:', style={'color': '#fff'}),
         dcc.Input(id='yaml-file-input', value=yaml_file, type='text', style={'width': '300px'}),
-        html.Button('Load', id='load-button', n_clicks=0),
-    ], style={'margin-bottom': '20px'}),
-    cyto.Cytoscape(
-        id='cytoscape',
-        elements=elements if elements else [],
-        layout={'name': 'breadthfirst'},
-        style={'width': '100%', 'height': '600px', 'border': '1px solid black', 'background-color': '#1e1e1e'},
-        stylesheet=default_stylesheet,
-    ),
-    html.Div(id='node-data', style={'margin-top': '20px', 'whiteSpace': 'pre-wrap', 'color': '#fff'})
+        html.Button('Load', id='load-button', n_clicks=0, style={'marginLeft': '10px'}),
+    ], style={'marginBottom': '20px'}),
+    html.Div([
+        cyto.Cytoscape(
+            id='cytoscape',
+            elements=elements if elements else [],
+            layout={'name': 'breadthfirst'},
+            style={'width': '100%', 'height': '600px', 'border': '1px solid black', 'background-color': '#1e1e1e'},
+            stylesheet=default_stylesheet,
+        ),
+        legend,  # Add the legend here
+    ], style={'position': 'relative'}),
+    html.Div(id='node-data', style={'marginTop': '20px', 'whiteSpace': 'pre-wrap', 'color': '#fff'})
 ], style={'backgroundColor': '#2e2e2e', 'padding': '20px'})
-
-
 
 # Callback to update the graph when a new YAML file is loaded or subflow is toggled
 @app.callback(
@@ -109,27 +211,31 @@ def update_graph(n_clicks, tapNodeData, yaml_file, elements):
     ctx = dash.callback_context
 
     if not ctx.triggered:
-        # No trigger, return the current elements
-        return elements
+        logger.debug("No trigger for update_graph callback.")
+        return dash.no_update
     else:
         trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+        logger.debug(f"Triggered by: {trigger_id}")
 
     if trigger_id == 'load-button':
         # Load new YAML file
+        logger.debug(f"Load button clicked. Loading YAML file: {yaml_file}")
         if os.path.exists(yaml_file):
             try:
                 elements = graph_builder.build_graph_data(yaml_file)
+                logger.debug(f"Loaded elements: {elements}")
                 return elements
             except Exception as e:
-                # Log the error and return empty list
-                logger = logging.getLogger(__name__)
+                # Log the error and return no update
                 logger.error(f"Error loading YAML file '{yaml_file}': {e}")
-                return []
+                return dash.no_update
         else:
-            return []
+            logger.error(f"YAML file '{yaml_file}' does not exist.")
+            return dash.no_update
     elif trigger_id == 'cytoscape':
         # Node was clicked
         data = tapNodeData
+        logger.debug(f"Node clicked: {data}")
         if data and data.get('type') == 'yml_flow':
             node_id = data['id']
             # Check if subflow nodes are already in the elements
@@ -141,6 +247,7 @@ def update_graph(n_clicks, tapNodeData, yaml_file, elements):
                 # Also remove the subflow node
                 subflow_node_id = node_id + '__subflow'
                 elements = [elem for elem in elements if elem['data']['id'] != subflow_node_id]
+                logger.debug(f"Collapsed subflow for node '{node_id}'.")
             else:
                 # Subflow is collapsed, so expand it
                 try:
@@ -154,15 +261,18 @@ def update_graph(n_clicks, tapNodeData, yaml_file, elements):
                                         (elem['data'].get('source') == node_id and elem['data'].get('target') == subflow_node_id)]
                     elements.extend(subflow_elements)
                     elements.extend(new_elements)
+                    logger.debug(f"Expanded subflow for node '{node_id}'.")
                 except Exception as e:
-                    logger = logging.getLogger(__name__)
                     logger.error(f"Error expanding subflow for node '{node_id}': {e}")
+                    return dash.no_update
             return elements
         else:
-            return elements
+            # Not a yml_flow node, no need to update elements
+            logger.debug("Clicked node is not a yml_flow type.")
+            return dash.no_update
     else:
-        return elements
-
+        logger.debug("No valid trigger found.")
+        return dash.no_update
 
 # Callback to display node information
 @app.callback(
@@ -171,6 +281,7 @@ def update_graph(n_clicks, tapNodeData, yaml_file, elements):
 )
 def display_node_data(data):
     if data:
+        logger.debug(f"Displaying data for node: {data}")
         node_id = data.get('id', 'N/A')
         node_label = data.get('label', node_id)
         node_type = data.get('type', 'N/A')
@@ -228,7 +339,7 @@ def display_node_data(data):
                     content.append(html.P(f"Schema '{structured_output_schema_name}' not found in 'structured_output_schema.py'.", style={'color': '#fff'}))
 
         elif node_type == 'yml_flow':
-            content.append(html.P("This node represents a sub-flow.", style={'color': '#fff'}))
+            content.append(html.P("This node represents a sub-flow. Click to expand or collapse.", style={'color': '#fff'}))
 
         elif node_type == 'set_variable':
             variable_name = data.get('variable_name', 'N/A')
@@ -249,8 +360,9 @@ def display_node_data(data):
         # Additional node types can be handled here
 
         return content
+    else:
+        logger.debug("No node data to display.")
     return "Click on a node to see details."
 
-
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    app.run_server(debug=False)
