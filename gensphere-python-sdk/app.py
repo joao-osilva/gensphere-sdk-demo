@@ -29,9 +29,9 @@ default_stylesheet = [
     {'selector': 'node',
      'style': {
          'label': 'data(label)',
-         'width': '100px',
-         'height': '100px',
-         'font-size': '16px',
+         'width': '300px',
+         'height': '300px',
+         'font-size': '24px',
          'background-color': '#888',
          'color': '#fff',
          'text-valign': 'center',

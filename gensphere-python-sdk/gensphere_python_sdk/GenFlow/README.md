@@ -1,24 +1,45 @@
 # GenFlow
 
-**GenFlow** is a powerful, low-level framework designed for AI developers who want to build, share, and observe complex LLM-driven workflows with ease. With YAML-defined nodes and flows, GenFlow enables developers to create modular, composable, and portable AI workflows that integrate seamlessly with existing tools and libraries.
+**GenFlow** is an open-source framework that streamlines the process of combining and nesting agentic systems.
 
 ---
 
 ## Why GenFlow?
 
-GenFlow is built to address three primary needs for AI developers:
+GenFlow is built to address five primary needs for AI developers:
 
 ### 1. Composability
 
-Building complex LLM workflows has never been easier. Define each step of your workflow in YAML, and GenFlow will handle dependency resolution and node orchestration automatically. Reference outputs from other nodes with a simple, intuitive syntax, allowing for highly modular and reusable code.
+Most real-world applications of AI agents involve building blocks which appear across different use cases. 
+
+For instance, whether you're optimizing a financial portfolio, automating reports of listed companies
+or creating a dashboard to visualize the latest trends in an industry, you would greatly benefit from having
+pre-built agents that analyze investor relation reports and answer questions about them. Most agentic worflows today are built as big monolithic blocks that encompass functionalities that could be reused across different applications.
+
+**GenFlow makes it easy to build complex agentic workflows by combining reusable and specialized agents.** 
+Define each step of your workflow in a YAML file, and GenFlow will handle dependency resolution and node orchestration automatically. Reference outputs from other nodes with a simple, intuitive syntax, allowing for highly modular and reusable code.
 
 ### 2. Portability
 
-Share your workflows effortlessly. With GenFlow, all you need to share is a set of YAML files and associated functions. Whether you’re collaborating with your team or sharing with the wider community, GenFlow ensures your workflows are easy to distribute and reproduce.
+An agentic system in GenFlow is defined by a set of **YAML files and python functions**. This make it easy to share your workflows with other developers.
 
-### 3. Observability
+### 3. Community collaboration
 
-Gain complete control over your workflow execution. As a low-level framework, GenFlow allows developers to observe and debug their workflows in granular detail, ensuring that you understand every step of your LLM's decision-making process.
+You can push and pull agentic workflows to **GenSphere, our community hub of AI agents**. Think of HuggingFace
+for agents - GenSphere is a repository of agentic workflows defined by YAML files and python functions. 
+
+We will also hold a set of **leaderboards for agentic systems**, such that you can either compete to have the 
+best implementation or leverage foundational agents from the hub and avoid working from scratch on problems 
+that have already been solved by the community. 
+
+### 4. Low-level control 
+
+As a low-level framework, GenFlow allows developers to observe and debug their workflows in granular detail, ensuring that you understand every step of your LLM's decision-making process.
+
+### 5. Compatibility with other AI agent frameworks
+
+You can integrate agents built with other frameworks (crewAI, AutoGen) easily and combine them together with othe
+blocks written directly with genFlow.
 
 ---
 
@@ -36,11 +57,11 @@ Gain complete control over your workflow execution. As a low-level framework, Ge
 
 ## Features
 
-- **YAML-defined Workflows**: Create complex execution graphs using simple YAML files.
-- **Modular Design**: Easily extend functionalities by adding custom functions and sub-flows.
-- **LLM Integration**: Seamlessly integrate with OpenAI's GPT models for advanced language tasks.
-- **API Integrations**: Utilize APIs like Tavily and Spider for web search and data scraping.
-- **Interoperable**: Compatible with other agent frameworks like AutoGen and Crews by exposing code as functions.
+- **Define workflows with simple YAML files**: Create complex execution graphs using simple YAML files.
+- **Nest agentic systems easily**: You can reference other YML files as nodes in your workflow, and integrate agentic systems easily.
+- **Push and pull agentic systems to our community hub**: Collaborate with others by using agents from *GenSphere*, our repository of agentic systems. You can also publish your agents to the platform and score them against pre-defined benchmarks.
+- **Visualize workflows and gain low-level control**: explore agentic systems visually with graph and depedency visualization. You can quickly see which functions are attached to which nodes and have complete control over your workflows.
+- **Integrate agents built with other platforms**: Compatible with other agent frameworks like AutoGen and Crews by exposing code as functions.
 
 ---
 
@@ -54,7 +75,8 @@ pip install genflow
 ## Quickstart guide
 
 ### 1. Define Your Workflow in YAML
-Create a sample `sample.yaml`
+Create a sample `sample.yaml`. Each nodes holds a function or an LLM service call. You can reference inputs of nodes
+as outputs from other using the `{{node_name.node_output}}` syntax.
 
 ```yaml
 # sample.yaml
