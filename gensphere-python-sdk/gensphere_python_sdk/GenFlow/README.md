@@ -38,7 +38,7 @@ As a low-level framework, GenFlow allows developers to observe and debug their w
 
 ### 5. Compatibility with other AI agent frameworks
 
-You can integrate agents built with other frameworks (crewAI, AutoGen) easily and combine them together with othe
+You can integrate agents built with other frameworks (crewAI, AutoGen) easily and combine them together with other
 blocks written directly with genFlow.
 
 ---
