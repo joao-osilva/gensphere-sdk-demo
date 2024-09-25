@@ -4,6 +4,7 @@ import pandas as pd
 from duckduckgo_search import DDGS
 import requests
 from typing import List, Dict
+import os
 
 def read_csv_file(file_path: str) -> Dict[str, pd.DataFrame]:
     """
@@ -85,3 +86,29 @@ def search_internet(search_query: str) -> Dict[str, List[str]]:
     """
     results = [result['title'] for result in DDGS().text(str(search_query), max_results=5)]
     return {"search_results": results}
+
+def spider_cloud_scrape(url):
+    from spider import Spider
+    # Initialize the Spider with your API key
+    spider_api_key=os.getenv(SPIDER_API_KEY)
+    app = Spider(api_key=spider_api_key)
+
+    # Crawl a entity
+    crawler_params = {
+        "limit": 1,
+        "proxy_enabled": True,
+        "store_data": False,
+        "metadata": False,
+        "request": "http",
+        "return_format": "markdown",
+    }
+
+    try:
+        scraped_data = app.crawl_url(url, params=crawler_params)
+        print("scraped data found")
+        markdown = scraped_data[0]["content"]
+    except Exception as e:
+        print(e)
+        markdown = "Error: " + str(e)
+
+    return markdown

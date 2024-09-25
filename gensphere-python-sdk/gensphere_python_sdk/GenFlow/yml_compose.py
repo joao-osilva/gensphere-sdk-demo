@@ -3,6 +3,7 @@
 import yaml
 import os
 import logging
+import re
 
 # Module-level logger
 print('name is')
@@ -60,7 +61,9 @@ class YmlCompose:
             raise ValueError(f"YAML file '{yaml_file}' must contain 'nodes'.")
 
         nodes = data['nodes']
-        for node_data in nodes:
+        i = 0
+        while i < len(nodes):
+            node_data = nodes[i]
             node_type = node_data.get('type')
             node_name = node_data.get('name')
             if not node_name:
@@ -87,113 +90,130 @@ class YmlCompose:
                 sub_flow_file_path = os.path.join(os.path.dirname(yaml_file), sub_flow_file)
                 logger.info(f"Sub-flow file for node '{unique_node_name}' is '{sub_flow_file_path}'")
 
-                # Recursively process the sub-flow
-                sub_flow_prefix = unique_node_name + '__'  # Use '__' as a separator
-                self._process_yaml_file(sub_flow_file_path, parent_prefix=sub_flow_prefix)
+                # Get parameters and outputs
+                sub_flow_params = node_data.get('params', {})
+                sub_flow_outputs = node_data.get('outputs', [])
 
-                # Create parameter injection nodes
-                param_injection_nodes = self._create_param_injection_nodes(node_data, sub_flow_prefix)
-                self.combined_data['nodes'].extend(param_injection_nodes)
-                logger.info(f"Added parameter injection nodes for '{unique_node_name}'")
+                # Remove the yml_flow node from the list
+                nodes.pop(i)
 
-                # Create a node to extract outputs from the sub-flow under the parent node's name
-                output_extraction_node = self._create_output_extraction_node(node_data, sub_flow_prefix, unique_node_name)
-                self.combined_data['nodes'].append(output_extraction_node)
-                logger.info(f"Added output extraction node for '{unique_node_name}'")
+                # Process sub-flow
+                sub_flow_nodes = self._load_yaml_file(sub_flow_file_path)
+                # Adjust sub-flow nodes
+                adjusted_sub_flow_nodes = self._adjust_sub_flow_nodes(
+                    sub_flow_nodes, unique_node_name + '__', sub_flow_params)
 
+                # Add adjusted sub-flow nodes to combined data
+                self.combined_data['nodes'].extend(adjusted_sub_flow_nodes)
+
+                # Build output mapping for outputs specified in yml_flow node
+                output_mapping = {}
+                for output in sub_flow_outputs:
+                    # Find the node in sub-flow that produces this output
+                    found = False
+                    for node in adjusted_sub_flow_nodes:
+                        if output in node.get('outputs', []):
+                            output_mapping[unique_node_name + '.' + output] = node['name'] + '.' + output
+                            found = True
+                            break
+                    if not found:
+                        logger.error(f"Output '{output}' specified in 'yml_flow' node '{unique_node_name}' not produced in sub-flow.")
+                        raise ValueError(f"Output '{output}' specified in 'yml_flow' node '{unique_node_name}' not produced in sub-flow.")
+
+                # Adjust references in remaining nodes
+                self._adjust_references_in_nodes(nodes[i:], node_name, output_mapping)
+
+                # Do not increment i, as we removed the current node
+                continue
             else:
                 # Copy node data and adjust the name
                 node_data = node_data.copy()
                 node_data['name'] = unique_node_name
 
                 # Adjust parameter references to account for prefixed node names
-                node_data['params'] = self._adjust_params(node_data.get('params', {}), parent_prefix)
+                node_data['params'] = self._adjust_params(node_data.get('params', {}), parent_prefix, set())
                 logger.debug(f"Adjusted parameters for node '{unique_node_name}': {node_data['params']}")
-
-                # Adjust variable names for 'set_variable' and 'get_variable' nodes
-                if node_type in ['set_variable', 'get_variable']:
-                    variable_name = node_data.get('variable_name')
-                    if variable_name:
-                        node_data['variable_name'] = parent_prefix + variable_name
-
-                # Adjust variable mappings for 'get_variables' nodes
-                if node_type == 'get_variables':
-                    variables = node_data.get('variables', {})
-                    adjusted_variables = {}
-                    for output_name, variable_name in variables.items():
-                        adjusted_variables[output_name] = parent_prefix + variable_name
-                    node_data['variables'] = adjusted_variables
 
                 # Add the node to the combined data
                 self.combined_data['nodes'].append(node_data)
                 logger.info(f"Added node '{unique_node_name}' to combined data")
 
-    def _create_param_injection_nodes(self, node_data, sub_flow_prefix):
+                i +=1  # Move to the next node
+
+    def _load_yaml_file(self, yaml_file):
+        with open(yaml_file, 'r') as f:
+            data = yaml.safe_load(f)
+        if 'nodes' not in data:
+            logger.error(f"YAML file '{yaml_file}' must contain 'nodes'.")
+            raise ValueError(f"YAML file '{yaml_file}' must contain 'nodes'.")
+        return data['nodes']
+
+    def _adjust_sub_flow_nodes(self, nodes, sub_flow_prefix, sub_flow_params):
+        adjusted_nodes = []
+        sub_flow_node_names = set()
+        for node_data in nodes:
+            node_type = node_data.get('type')
+            node_name = node_data.get('name')
+            if not node_name:
+                logger.error("A node without a 'name' was found in sub-flow.")
+                raise ValueError("A node without a 'name' was found in sub-flow.")
+
+            sub_flow_node_names.add(node_name)  # Collect node names in sub-flow
+
+            prefixed_node_name = sub_flow_prefix + node_name
+            if prefixed_node_name in self.node_name_set:
+                logger.error(f"Duplicate node name '{prefixed_node_name}' detected in sub-flow.")
+                raise ValueError(f"Duplicate node name '{prefixed_node_name}' detected in sub-flow.")
+
+            self.node_name_set.add(prefixed_node_name)
+
+            node_data = node_data.copy()
+            node_data['name'] = prefixed_node_name
+
+            # Replace parameter references in node params with actual sub_flow_params
+            node_data['params'] = self._replace_params(node_data.get('params', {}), sub_flow_params)
+
+            # Adjust any dependencies (in params) to include the sub_flow_prefix
+            node_data['params'] = self._adjust_params(node_data.get('params', {}), sub_flow_prefix, sub_flow_node_names)
+
+            adjusted_nodes.append(node_data)
+
+        return adjusted_nodes
+
+    def _replace_params(self, params, sub_flow_params):
         """
-        Creates nodes to inject parameters into the sub-flow.
-
-        Args:
-            node_data (dict): The original 'yml_flow' node data.
-            sub_flow_prefix (str): The prefix used for sub-flow nodes.
-
-        Returns:
-            list: A list of nodes that inject parameters into the sub-flow.
-        """
-        injection_nodes = []
-        params = node_data.get('params', {})
-        for param_name, param_value in params.items():
-            # Create a node that sets a parameter in the sub-flow
-            injection_node = {
-                'name': f"{sub_flow_prefix}inject_param_{param_name}",
-                'type': 'set_variable',
-                'variable_name': f"{sub_flow_prefix}{param_name}",
-                'params': {
-                    'value': param_value
-                },
-                'outputs': []
-            }
-            if injection_node['name'] in self.node_name_set:
-                logger.error(f"Duplicate injection node name '{injection_node['name']}' detected.")
-                raise ValueError(f"Duplicate injection node name '{injection_node['name']}' detected.")
-            self.node_name_set.add(injection_node['name'])
-            injection_nodes.append(injection_node)
-        return injection_nodes
-
-    def _create_output_extraction_node(self, node_data, sub_flow_prefix, parent_node_name):
-        """
-        Creates a node to extract outputs from the sub-flow and make them available under the parent node's name.
-
-        Args:
-            node_data (dict): The original 'yml_flow' node data.
-            sub_flow_prefix (str): The prefix used for sub-flow nodes.
-            parent_node_name (str): The unique name of the parent node.
-
-        Returns:
-            dict: A node that extracts outputs from the sub-flow.
-        """
-        outputs = node_data.get('outputs', [])
-        variables = {output_name: f"{sub_flow_prefix}{output_name}" for output_name in outputs}
-        extraction_node = {
-            'name': parent_node_name,  # Use the parent node's unique name
-            'type': 'get_variables',
-            'variables': variables,
-            'outputs': outputs
-        }
-        return extraction_node
-
-    def _adjust_params(self, params, parent_prefix):
-        """
-        Adjusts parameter references to use prefixed node names and variables.
+        Replaces parameter placeholders in params with the values passed in from the parent flow.
 
         Args:
             params (dict): The parameters to adjust.
-            parent_prefix (str): The prefix for node names.
+            sub_flow_params (dict): Parameters passed from the parent flow to the sub-flow.
 
         Returns:
             dict: The adjusted parameters.
         """
-        import re
+        adjusted_params = {}
+        for key, value in params.items():
+            if isinstance(value, str):
+                for param_name, param_value in sub_flow_params.items():
+                    pattern = r"\{\{\s*" + re.escape(param_name) + r"\s*\}\}"
+                    value = re.sub(pattern, str(param_value), value)
+                adjusted_params[key] = value
+            else:
+                adjusted_params[key] = value
+        return adjusted_params
 
+    def _adjust_params(self, params, prefix, sub_flow_node_names):
+        """
+        Adjusts parameter references to use prefixed node names.
+
+        Args:
+            params (dict): The parameters to adjust.
+            prefix (str): The prefix for node names.
+            sub_flow_node_names (set): Set of node names within the sub-flow.
+
+        Returns:
+            dict: The adjusted parameters.
+        """
         adjusted_params = {}
         pattern = r"(\{\{\s*)([\w_\.]+)(\s*\}\})"
 
@@ -201,27 +221,48 @@ class YmlCompose:
             if isinstance(value, str):
                 def replace_func(match):
                     full_match = match.group(0)
-                    prefix = match.group(1)
+                    prefix_match = match.group(1)
                     reference = match.group(2)
-                    suffix = match.group(3)
+                    suffix_match = match.group(3)
 
                     # Split the reference into parts
                     parts = reference.split('.')
                     first_part = parts[0]
                     rest_parts = parts[1:]
 
-                    # Adjust the first part (node or variable name)
-                    if parent_prefix + first_part in self.node_name_set:
-                        adjusted_first_part = parent_prefix + first_part
+                    # Only adjust if the first part is in sub_flow_node_names
+                    if first_part in sub_flow_node_names:
+                        adjusted_first_part = prefix + first_part
                     else:
-                        adjusted_first_part = parent_prefix + first_part
+                        adjusted_first_part = first_part
 
                     adjusted_reference = '.'.join([adjusted_first_part] + rest_parts)
 
-                    return prefix + adjusted_reference + suffix
+                    return prefix_match + adjusted_reference + suffix_match
 
                 adjusted_value = re.sub(pattern, replace_func, value)
                 adjusted_params[key] = adjusted_value
             else:
                 adjusted_params[key] = value
         return adjusted_params
+
+    def _adjust_references_in_nodes(self, nodes, yml_flow_node_name, output_mapping):
+        """
+        Adjusts references in the nodes to replace references to outputs from the yml_flow node.
+
+        Args:
+            nodes (list): The list of nodes to adjust.
+            yml_flow_node_name (str): The name of the yml_flow node.
+            output_mapping (dict): Mapping from yml_flow outputs to sub-flow node outputs.
+        """
+        for node_data in nodes:
+            params = node_data.get('params', {})
+            adjusted_params = {}
+            for key, value in params.items():
+                if isinstance(value, str):
+                    for yml_flow_output, sub_flow_output in output_mapping.items():
+                        # Replace references like {{ yml_flow_node_name.output_name }}
+                        pattern = r"\{\{\s*" + re.escape(yml_flow_node_name + '.' + yml_flow_output.split('.')[-1]) + r"\s*\}\}"
+                        value = re.sub(pattern, '{{ ' + sub_flow_output + ' }}', value)
+                adjusted_params[key] = value
+            node_data['params'] = adjusted_params

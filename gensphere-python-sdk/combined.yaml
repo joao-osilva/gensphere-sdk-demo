@@ -11,32 +11,14 @@ nodes:
   outputs:
   - processed_data
   params:
-    data: '{{ data_processing__data }}'
+    data: '{{ read_csv.data }}'
   type: function_call
-- name: data_processing__output_processed_data
-  outputs: []
-  params:
-    value: '{{ data_processing__process_data_step.processed_data }}'
-  type: set_variable
-  variable_name: data_processing__processed_data
-- name: data_processing__inject_param_data
-  outputs: []
-  params:
-    value: '{{ read_csv.data }}'
-  type: set_variable
-  variable_name: data_processing__data
-- name: data_processing
-  outputs:
-  - processed_data
-  type: get_variables
-  variables:
-    processed_data: data_processing__processed_data
 - function: format_analysis_request
   name: prepare_analysis
   outputs:
   - analysis_prompt
   params:
-    processed_data: '{{ data_processing.processed_data }}'
+    processed_data: '{{ data_processing__process_data_step.processed_data }}'
   type: function_call
 - model: gpt-4o-2024-08-06
   name: analyze_data
