@@ -60,13 +60,17 @@ default_stylesheet = [
          'width': 2,
          'line-color': '#ccc',
      }},
+    {'selector': '.edge-to-yml-flow',
+     'style': {
+         'line-style': 'dashed',
+     }},
 ]
 
 # Build the initial graph elements
-yaml_file = 'sample.yaml'  # Replace with your composed YAML file
+yaml_file = 'sample.yaml'  # Ensure this is the correct YAML file
 try:
     elements = graph_builder.build_graph_data(yaml_file)
-    logger.info(f"Elements being passed to Cytoscape:\n{elements}")
+    logger.debug(f"Elements being passed to Cytoscape:\n{elements}")
 except Exception as e:
     logger.error(f"Error building graph data: {e}")
     elements = []
@@ -79,6 +83,7 @@ logger.debug(f"Elements: {elements}")
 legend = html.Div([
     html.H3('Legend', style={'color': '#fff', 'textAlign': 'center'}),
     html.Div([
+        # Node type legends
         html.Div([
             html.Span(style={
                 'display': 'inline-block',
@@ -109,6 +114,7 @@ legend = html.Div([
             }),
             html.Span('YAML Flow Node', style={'color': '#fff'})
         ], style={'marginBottom': '5px'}),
+        # Node shape legends
         html.Div([
             html.Span(style={
                 'display': 'inline-block',
@@ -144,6 +150,28 @@ legend = html.Div([
                 'marginRight': '10px',
             }),
             html.Span('Output Node', style={'color': '#fff'})
+        ], style={'marginBottom': '5px'}),
+        # Edge legends
+        html.Div([
+            html.Span(style={
+                'display': 'inline-block',
+                'width': '20px',
+                'height': '2px',
+                'backgroundColor': '#ccc',
+                'marginRight': '10px'
+            }),
+            html.Span('Dependency Edge', style={'color': '#fff'})
+        ], style={'marginBottom': '5px'}),
+        html.Div([
+            html.Span(style={
+                'display': 'inline-block',
+                'width': '20px',
+                'height': '2px',
+                'backgroundColor': '#ccc',
+                'borderTop': '2px dashed #ccc',
+                'marginRight': '10px'
+            }),
+            html.Span('Edge to yml_flow Node (Dashed)', style={'color': '#fff'})
         ], style={'marginBottom': '5px'}),
     ], style={'padding': '10px'})
 ], style={
@@ -214,11 +242,31 @@ def display_node_data(data):
         node_id = data.get('id', 'N/A')
         node_label = data.get('label', node_id)
         node_type = data.get('type', 'N/A')
+        params = data.get('params', {})
+        outputs = data.get('outputs', [])
+
         content = [
             html.H4(f"Node: {node_label}", style={'color': '#fff'}),
             html.P(f"Type: {node_type}", style={'color': '#fff'})
         ]
 
+        # Display input parameters
+        if params:
+            content.append(html.H5("Input Parameters:", style={'color': '#fff'}))
+            for key, value in params.items():
+                content.append(html.P(f"{key}: {value}", style={'color': '#fff'}))
+        else:
+            content.append(html.P("No input parameters.", style={'color': '#fff'}))
+
+        # Display outputs
+        if outputs:
+            content.append(html.H5("Outputs:", style={'color': '#fff'}))
+            for output in outputs:
+                content.append(html.P(f"- {output}", style={'color': '#fff'}))
+        else:
+            content.append(html.P("No outputs.", style={'color': '#fff'}))
+
+        # Existing logic for functions and tools
         if node_type == 'function_call':
             func_name = data.get('function', '')
             if func_name:

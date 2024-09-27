@@ -73,9 +73,11 @@ def traverse_node_fields(node_value: Union[str, Dict, List]) -> Set[str]:
             referenced_nodes.update(nodes)
     elif isinstance(node_value, dict):
         for key, value in node_value.items():
-            # Optionally skip certain keys if needed
-            nodes = traverse_node_fields(value)
-            referenced_nodes.update(nodes)
+            if key not in {'name', 'type', 'outputs'}:
+                nodes_in_key = extract_referenced_nodes(str(key))
+                referenced_nodes.update(nodes_in_key)
+                nodes_in_value = traverse_node_fields(value)
+                referenced_nodes.update(nodes_in_value)
     elif isinstance(node_value, list):
         for item in node_value:
             nodes = traverse_node_fields(item)
@@ -147,6 +149,9 @@ def build_graph_data(yaml_file: str) -> list:
         logger.warning(f"No nodes found in YAML file '{yaml_file}'.")
         return elements  # Return empty list if no nodes
 
+    # Build a mapping from node IDs to node types
+    node_type_map = {}
+
     for node in nodes:
         node_name = node.get('name')
         node_type = node.get('type')
@@ -162,12 +167,15 @@ def build_graph_data(yaml_file: str) -> list:
             raise ValueError(f"Duplicate node name '{node_id}' detected.")
 
         node_ids.add(node_id)
+        node_type_map[node_id] = node_type
 
         # Prepare node data with default fields to prevent null values
         node_data = {
             'id': node_id,
             'label': node_name,
-            'type': node_type
+            'type': node_type,
+            'params': node.get('params', {}),
+            'outputs': node.get('outputs', [])
         }
 
         # Include additional fields based on node type
@@ -189,6 +197,11 @@ def build_graph_data(yaml_file: str) -> list:
         elements.append(element)
         logger.debug(f"Added node: {element}")
 
+    # After all nodes are added, create edges
+    for node in nodes:
+        node_name = node.get('name')
+        node_id = node_name
+
         # Handle dependencies by traversing all node fields
         node_fields = node.copy()
         # Exclude certain keys that do not contain dependencies
@@ -200,9 +213,14 @@ def build_graph_data(yaml_file: str) -> list:
         for referenced_node in referenced_nodes:
             referenced_node_id = referenced_node
             if referenced_node_id in node_ids:
+                edge_classes = 'dependency-edge'  # Default edge class
+                # Check if target node is a yml_flow
+                target_node_type = node_type_map.get(node_id, '')
+                if target_node_type == 'yml_flow':
+                    edge_classes += ' edge-to-yml-flow'
                 dependency_edge = {
                     'data': {'source': referenced_node_id, 'target': node_id},
-                    'classes': 'dependency-edge'  # Used for styling dependency edges
+                    'classes': edge_classes  # Used for styling dependency edges
                 }
                 edges.append(dependency_edge)
                 logger.debug(f"Added dependency edge from '{referenced_node_id}' to '{node_id}': {dependency_edge}")
