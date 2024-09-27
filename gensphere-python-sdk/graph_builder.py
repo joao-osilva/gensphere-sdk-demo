@@ -3,7 +3,7 @@
 import yaml
 import os
 import logging
-from typing import Optional
+from typing import Optional, Set, Union, List, Dict
 
 # Configure module-level logger
 logger = logging.getLogger(__name__)
@@ -39,22 +39,48 @@ def parse_yaml(yaml_file: str) -> dict:
             raise
 
 
-def extract_referenced_node(template_str: str) -> Optional[str]:
+def extract_referenced_nodes(template_str: str) -> Set[str]:
     """
-    Extracts the referenced node name from a templated string.
+    Extracts all referenced node names from a templated string.
 
     Args:
         template_str (str): The templated string, e.g., "{{ node.output }}".
 
     Returns:
-        Optional[str]: The referenced node name or None if not found.
+        Set[str]: A set of referenced node names.
     """
     import re
-    pattern = r"\{\{\s*([\w_]+)\.[\w_]+\s*\}\}"
-    match = re.search(pattern, template_str)
-    if match:
-        return match.group(1)
-    return None
+    pattern = r"\{\{\s*([\w_][\w_\d]*)\.[\w_]+\s*\}\}"
+    matches = re.findall(pattern, template_str)
+    logger.debug(f"Extracted referenced nodes from '{template_str}': {matches}")
+    return set(matches)
+
+
+def traverse_node_fields(node_value: Union[str, Dict, List]) -> Set[str]:
+    """
+    Recursively traverses a node's fields to find all referenced node names.
+
+    Args:
+        node_value: The node value to traverse.
+
+    Returns:
+        Set[str]: A set of referenced node names found within the node value.
+    """
+    referenced_nodes = set()
+    if isinstance(node_value, str):
+        if '{{' in node_value and '}}' in node_value:
+            nodes = extract_referenced_nodes(node_value)
+            referenced_nodes.update(nodes)
+    elif isinstance(node_value, dict):
+        for key, value in node_value.items():
+            # Optionally skip certain keys if needed
+            nodes = traverse_node_fields(value)
+            referenced_nodes.update(nodes)
+    elif isinstance(node_value, list):
+        for item in node_value:
+            nodes = traverse_node_fields(item)
+            referenced_nodes.update(nodes)
+    return referenced_nodes
 
 
 def identify_and_style_entrypoints_outputs(elements: list) -> list:
@@ -84,14 +110,14 @@ def identify_and_style_entrypoints_outputs(elements: list) -> list:
             node_id = elem['data']['id']
             node_type = elem['data'].get('type', '')
             # Check for entrypoint
-            if incoming_edges.get(node_id, 0) == 0 and node_type != 'subflow-node':
+            if incoming_edges.get(node_id, 0) == 0:
                 if 'classes' in elem:
                     elem['classes'] += ' entrypoint-node'
                 else:
                     elem['classes'] = 'entrypoint-node'
                 logger.debug(f"Marked node '{node_id}' as entrypoint.")
             # Check for output
-            if outgoing_edges.get(node_id, 0) == 0 and node_type != 'subflow-node':
+            if outgoing_edges.get(node_id, 0) == 0:
                 if 'classes' in elem:
                     elem['classes'] += ' output-node'
                 else:
@@ -121,137 +147,67 @@ def build_graph_data(yaml_file: str) -> list:
         logger.warning(f"No nodes found in YAML file '{yaml_file}'.")
         return elements  # Return empty list if no nodes
 
-    def add_nodes(nodes: list, parent_id: Optional[str] = None, prefix: str = ''):
-        """
-        Recursively adds nodes and edges to the Cytoscape elements list.
+    for node in nodes:
+        node_name = node.get('name')
+        node_type = node.get('type')
 
-        Args:
-            nodes (list): List of node dictionaries from YAML.
-            parent_id (Optional[str]): ID of the parent node.
-            prefix (str): Prefix to ensure unique node IDs in subflows.
-        """
-        for node in nodes:
-            node_name = node.get('name')
-            node_type = node.get('type')
+        if not node_name:
+            logger.error("A node without a 'name' was found.")
+            raise ValueError("All nodes must have a 'name' field.")
 
-            if not node_name:
-                logger.error("A node without a 'name' was found.")
-                raise ValueError("All nodes must have a 'name' field.")
+        node_id = node_name
 
-            node_id = prefix + node_name
+        if node_id in node_ids:
+            logger.error(f"Duplicate node name '{node_id}' detected.")
+            raise ValueError(f"Duplicate node name '{node_id}' detected.")
 
-            if node_id in node_ids:
-                logger.error(f"Duplicate node name '{node_id}' detected.")
-                raise ValueError(f"Duplicate node name '{node_id}' detected.")
+        node_ids.add(node_id)
 
-            node_ids.add(node_id)
+        # Prepare node data with default fields to prevent null values
+        node_data = {
+            'id': node_id,
+            'label': node_name,
+            'type': node_type
+        }
 
-            # Prepare node data with default fields to prevent null values
-            node_data = {
-                'id': node_id,
-                'label': node_name,
-                'type': node_type
-            }
+        # Include additional fields based on node type
+        if node_type == 'function_call':
+            node_data['function'] = node.get('function', '')
+            node_data['function_call'] = node.get('function_call', '')
+        elif node_type == 'llm_service':
+            node_data['tools'] = node.get('tools', [])
+            node_data['structured_output_schema'] = node.get('structured_output_schema', '')
+        elif node_type == 'yml_flow':
+            node_data['yml_file'] = node.get('yml_file', '')
+        # Add other node types as needed
 
-            # Include additional fields based on node type
-            if node_type == 'function_call':
-                node_data['function'] = node.get('function', '')
-                node_data['function_call'] = node.get('function_call', '')
-            elif node_type == 'llm_service':
-                node_data['tools'] = node.get('tools', [])
-                node_data['structured_output_schema'] = node.get('structured_output_schema', '')
-            elif node_type in ['set_variable', 'get_variable']:
-                node_data['variable_name'] = node.get('variable_name', '')
-            elif node_type == 'get_variables':
-                node_data['variables'] = node.get('variables', {})
-            elif node_type == 'yml_flow':
-                node_data['yml_file'] = node.get('yml_file', '')
-            # Add other node types as needed
+        # Add node element
+        element = {
+            'data': node_data,
+            'classes': node_type  # Used for styling in Cytoscape
+        }
+        elements.append(element)
+        logger.debug(f"Added node: {element}")
 
-            # Add node element
-            element = {
-                'data': node_data,
-                'classes': node_type  # Used for styling in Cytoscape
-            }
-            elements.append(element)
-            logger.debug(f"Added node: {element}")
-
-            # Add edge from parent to current node if parent exists
-            if parent_id:
-                edge = {
-                    'data': {'source': parent_id, 'target': node_id},
-                    'classes': 'parent-edge'  # Used for styling dependency edges
+        # Handle dependencies by traversing all node fields
+        node_fields = node.copy()
+        # Exclude certain keys that do not contain dependencies
+        excluded_keys = {'name', 'type', 'outputs'}
+        for key in excluded_keys:
+            node_fields.pop(key, None)
+        referenced_nodes = traverse_node_fields(node_fields)
+        logger.debug(f"Node '{node_id}' references nodes: {referenced_nodes}")
+        for referenced_node in referenced_nodes:
+            referenced_node_id = referenced_node
+            if referenced_node_id in node_ids:
+                dependency_edge = {
+                    'data': {'source': referenced_node_id, 'target': node_id},
+                    'classes': 'dependency-edge'  # Used for styling dependency edges
                 }
-                edges.append(edge)
-                logger.debug(f"Added edge from '{parent_id}' to '{node_id}': {edge}")
-
-            # Handle dependencies based on 'params' field
-            if 'params' in node:
-                for param_key, param_value in node['params'].items():
-                    if isinstance(param_value, str) and '{{' in param_value and '}}' in param_value:
-                        # Extract the referenced node name from the template {{ node.output }}
-                        referenced_node = extract_referenced_node(param_value)
-                        if referenced_node:
-                            referenced_node_id = prefix + referenced_node
-                            if referenced_node_id in node_ids:
-                                dependency_edge = {
-                                    'data': {'source': referenced_node_id, 'target': node_id},
-                                    'classes': 'dependency-edge'  # Used for styling dependency edges
-                                }
-                                edges.append(dependency_edge)
-                                logger.debug(f"Added dependency edge from '{referenced_node_id}' to '{node_id}': {dependency_edge}")
-                            else:
-                                logger.warning(f"Referenced node '{referenced_node_id}' not found for dependency in node '{node_id}'.")
-
-            # Handle subflows recursively
-            if node_type == 'yml_flow':
-                sub_yaml_file = node.get('yml_file')
-                if not sub_yaml_file:
-                    logger.error(f"Node '{node_id}' of type 'yml_flow' must have a 'yml_file' field.")
-                    raise ValueError(f"Node '{node_id}' of type 'yml_flow' must have a 'yml_file' field.")
-
-                # Compute the absolute path of the sub-flow file
-                sub_flow_file_path = os.path.join(os.path.dirname(yaml_file), sub_yaml_file)
-                if not os.path.exists(sub_flow_file_path):
-                    logger.error(f"Sub-flow YAML file '{sub_flow_file_path}' does not exist.")
-                    raise FileNotFoundError(f"Sub-flow YAML file '{sub_flow_file_path}' does not exist.")
-
-                logger.info(f"Processing sub-flow YAML file '{sub_flow_file_path}' for node '{node_id}'.")
-
-                # Add a special node representing the subflow
-                subflow_node_id = node_id + '__subflow'
-                subflow_node = {
-                    'data': {
-                        'id': subflow_node_id,
-                        'label': f"{node_name} Subflow",
-                        'type': 'subflow-node'
-                    },
-                    'classes': 'subflow-node'
-                }
-                elements.append(subflow_node)
-                node_ids.add(subflow_node_id)
-                logger.debug(f"Added subflow node: {subflow_node}")
-
-                # Add edge from the parent node to the subflow node
-                subflow_edge = {
-                    'data': {'source': node_id, 'target': subflow_node_id},
-                    'classes': 'subflow-edge'  # Used for styling subflow edges
-                }
-                edges.append(subflow_edge)
-                logger.debug(f"Added edge from '{node_id}' to '{subflow_node_id}': {subflow_edge}")
-
-                # Parse the sub-flow YAML
-                sub_flow_data = parse_yaml(sub_flow_file_path)
-                sub_flow_nodes = sub_flow_data.get('nodes', [])
-                if not sub_flow_nodes:
-                    logger.warning(f"Sub-flow YAML file '{sub_flow_file_path}' contains no nodes.")
-                    continue
-
-                # Recursively add subflow nodes with updated prefix for unique IDs
-                sub_prefix = subflow_node_id + '__'
-                add_nodes(sub_flow_nodes, parent_id=subflow_node_id, prefix=sub_prefix)
-
-    add_nodes(nodes)
+                edges.append(dependency_edge)
+                logger.debug(f"Added dependency edge from '{referenced_node_id}' to '{node_id}': {dependency_edge}")
+            else:
+                logger.warning(f"Referenced node '{referenced_node_id}' not found for dependency in node '{node_id}'.")
 
     # Combine nodes and edges
     elements.extend(edges)

@@ -33,12 +33,12 @@ nodes:
       - get_exchange_rate
       - search_internet
     params:
-      prompt: "You need to do three things.
-      1- Find a major new headline that happened in Brazil
-      2- Get the exhange rate from BRL to USD
-      3- analyze the table {{ prepare_analysis.analysis_prompt }}
-      4- In this table, value1, value 2 refer to value of items in USD. Convert that to BRL, and add new
-      columns with BRL price.Rename the other columns to USD price. Answer in table format"
+      prompt: |
+        You need to do three things.
+        1- Find a major new headline that happened in Brazil
+        2- Get the exchange rate from BRL to USD
+        3- analyze the table {{ prepare_analysis.analysis_prompt }}
+        4- In this table, value1, value2 refer to value of items in USD. Convert that to BRL, and add new columns with BRL price. Rename the other columns to USD price. Answer in table format
     outputs:
       - analysis_result
 
