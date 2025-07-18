@@ -1,2 +1,2 @@
 python-dotenv=>1.0.1
-pyautogen=>0.3.0
+ag2=>0.3.0

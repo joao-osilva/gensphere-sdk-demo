@@ -10,7 +10,7 @@ python = ">=3.11,<3.13"
 fastapi = "^0.114.1"
 uvicorn = "^0.30.6"
 crewai = {extras = ["tools"], version = "^0.55.2"}
-pyautogen = "^0.3.0"
+ag2 = "^0.3.0"
 scikit-learn = "^1.5.2"
 xgboost = "^2.1.1"
 
